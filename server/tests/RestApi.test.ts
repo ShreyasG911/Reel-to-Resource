@@ -1,19 +1,24 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { Server } from 'http';
+import bcrypt from 'bcryptjs';
 import { createApp } from '../src/app';
 import { Resource } from '../src/models/Resource';
 import { AutomationEvent } from '../src/models/AutomationEvent';
 import { ReplyLog } from '../src/models/ReplyLog';
 import { IntegrationSetting } from '../src/models/IntegrationSetting';
+import { AdminUser } from '../src/models/AdminUser';
 
 const TEST_DB_URI = 'mongodb://localhost:27017/reel_to_resource_rest_api_test';
 
-describe('Dashboard REST API Endpoints', () => {
+describe('Dashboard REST API Endpoints & Security', () => {
   let server: Server;
   let baseUrl: string;
+  let adminAuthHeader: { Authorization: string };
 
   beforeAll(async () => {
+    process.env.DASHBOARD_JWT_SECRET = 'test_dashboard_jwt_secret_32_characters_long_min!';
+    process.env.ADMIN_JWT_SECRET = 'test_dashboard_jwt_secret_32_characters_long_min!';
     await mongoose.connect(TEST_DB_URI);
     const app = createApp();
     await new Promise<void>((resolve) => {
@@ -36,15 +41,75 @@ describe('Dashboard REST API Endpoints', () => {
     await AutomationEvent.deleteMany({});
     await ReplyLog.deleteMany({});
     await IntegrationSetting.deleteMany({});
-  });
+    await AdminUser.deleteMany({});
 
-  it('POST /api/v1/resources creates resource and auto-generates canonical URL', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/resources`, {
+    // Provision test administrator
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash('CorrectAdminPassword123!', salt);
+    await AdminUser.create({
+      username: 'admin',
+      passwordHash,
+    });
+
+    // Obtain JWT token via login endpoint
+    const loginRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        username: 'admin',
+        password: 'CorrectAdminPassword123!',
+      }),
+    });
+    const loginBody: any = await loginRes.json();
+    adminAuthHeader = {
+      Authorization: `Bearer ${loginBody.token}`,
+    };
+  });
+
+  // 1. Authentication & Anonymous Access Tests
+  it('rejects unauthenticated requests to protected endpoints with 401', async () => {
+    const endpoints = [
+      { method: 'GET', path: '/api/v1/resources' },
+      { method: 'POST', path: '/api/v1/resources' },
+      { method: 'GET', path: '/api/v1/automation/settings' },
+      { method: 'GET', path: '/api/v1/integration/status' },
+      { method: 'GET', path: '/api/v1/analytics/overview' },
+      { method: 'GET', path: '/api/v1/events' },
+    ];
+
+    for (const ep of endpoints) {
+      const res = await fetch(`${baseUrl}${ep.path}`, {
+        method: ep.method,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect(res.status).toBe(401);
+      const body: any = await res.json();
+      expect(body.error).toMatch(/unauthorized|authentication required|token/i);
+    }
+  });
+
+  it('rejects login with invalid credentials with 401', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'admin',
+        password: 'WrongPassword!',
+      }),
+    });
+    expect(res.status).toBe(401);
+    const body: any = await res.json();
+    expect(body.error).toContain('Invalid username or password');
+  });
+
+  // 2. Resource Management Tests (Authenticated)
+  it('POST /api/v1/resources creates resource and auto-generates canonical URL', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/resources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeader },
+      body: JSON.stringify({
         title: 'Figma System',
-        reelId: 'https://instagram.com/reel/FIGMA_123/?utm=copy', // URL input should be normalized to shortcode
+        reelId: 'https://instagram.com/reel/FIGMA_123/?utm=copy', // URL input normalized to shortcode
         resourceUrl: 'https://example.com/figma',
         resourceType: 'template',
         tags: ['figma', 'ui'],
@@ -68,7 +133,7 @@ describe('Dashboard REST API Endpoints', () => {
 
     const res = await fetch(`${baseUrl}/api/v1/resources`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeader },
       body: JSON.stringify({
         title: 'New Resource',
         reelId: 'DUP_REEL_001',
@@ -81,10 +146,27 @@ describe('Dashboard REST API Endpoints', () => {
     expect(body.error).toContain('already registered');
   });
 
-  it('GET /api/v1/resources lists resources with pagination and search', async () => {
+  it('POST /api/v1/resources validates destination URL and rejects unsafe protocols with 400', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/resources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeader },
+      body: JSON.stringify({
+        title: 'Unsafe Resource',
+        reelId: 'UNSAFE_001',
+        resourceUrl: 'javascript:alert(1)',
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error).toBe('Validation failed');
+    expect(body.details.join(' ')).toContain('HTTP or HTTPS');
+  });
+
+  it('GET /api/v1/resources safely escapes search regex and lists matching resources', async () => {
     await Resource.create([
       {
-        title: 'React Hooks Handbook',
+        title: 'React [Hooks] Handbook',
         reelId: 'REACT_HOOKS',
         canonicalReelUrl: 'https://www.instagram.com/reel/REACT_HOOKS/',
         resourceUrl: 'https://example.com/react',
@@ -101,11 +183,23 @@ describe('Dashboard REST API Endpoints', () => {
       },
     ]);
 
-    const res = await fetch(`${baseUrl}/api/v1/resources?search=react`);
+    // Test with special regex characters that would crash unescaped RegExp
+    const safeRegexRes = await fetch(`${baseUrl}/api/v1/resources?search=[Hooks]`, {
+      headers: adminAuthHeader,
+    });
+    expect(safeRegexRes.status).toBe(200);
+    const safeRegexBody: any = await safeRegexRes.json();
+    expect(safeRegexBody.data.length).toBe(1);
+    expect(safeRegexBody.data[0].title).toBe('React [Hooks] Handbook');
+
+    // Test normal search query
+    const res = await fetch(`${baseUrl}/api/v1/resources?search=react`, {
+      headers: adminAuthHeader,
+    });
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.data.length).toBe(1);
-    expect(body.data[0].title).toBe('React Hooks Handbook');
+    expect(body.data[0].title).toBe('React [Hooks] Handbook');
     expect(body.pagination.total).toBe(1);
   });
 
@@ -120,7 +214,7 @@ describe('Dashboard REST API Endpoints', () => {
 
     const res = await fetch(`${baseUrl}/api/v1/resources/${resource._id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeader },
       body: JSON.stringify({
         isAvailable: false,
         title: 'Updated Title',
@@ -143,6 +237,7 @@ describe('Dashboard REST API Endpoints', () => {
 
     const res = await fetch(`${baseUrl}/api/v1/resources/${resource._id}`, {
       method: 'DELETE',
+      headers: adminAuthHeader,
     });
 
     expect(res.status).toBe(200);
@@ -151,14 +246,16 @@ describe('Dashboard REST API Endpoints', () => {
   });
 
   it('GET and PATCH /api/v1/automation/settings manages automation settings', async () => {
-    const getRes = await fetch(`${baseUrl}/api/v1/automation/settings`);
+    const getRes = await fetch(`${baseUrl}/api/v1/automation/settings`, {
+      headers: adminAuthHeader,
+    });
     expect(getRes.status).toBe(200);
     const getBody: any = await getRes.json();
     expect(getBody.data.autoReplyEnabled).toBe(true);
 
     const patchRes = await fetch(`${baseUrl}/api/v1/automation/settings`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeader },
       body: JSON.stringify({
         autoReplyEnabled: false,
         templates: {
@@ -185,7 +282,7 @@ describe('Dashboard REST API Endpoints', () => {
 
     const res = await fetch(`${baseUrl}/api/v1/automation/test-match`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeader },
       body: JSON.stringify({
         input: 'https://www.instagram.com/reel/SIM_MATCH_001/?igsh=share',
       }),
@@ -199,13 +296,16 @@ describe('Dashboard REST API Endpoints', () => {
   });
 
   it('GET /api/v1/integration/status returns environment checklist without secrets', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/integration/status`);
+    const res = await fetch(`${baseUrl}/api/v1/integration/status`, {
+      headers: adminAuthHeader,
+    });
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.data.environmentChecklist).toBeDefined();
     expect(body.data.webhookEndpoint).toBe('/api/v1/webhooks/instagram');
     // Ensure no secrets are leaked
     expect(JSON.stringify(body)).not.toContain('test_meta_app_secret');
+    expect(JSON.stringify(body)).not.toContain('passwordHash');
   });
 
   it('GET /api/v1/analytics/overview returns aggregated statistics', async () => {
@@ -218,11 +318,12 @@ describe('Dashboard REST API Endpoints', () => {
       status: 'active',
     });
 
-    const res = await fetch(`${baseUrl}/api/v1/analytics/overview`);
+    const res = await fetch(`${baseUrl}/api/v1/analytics/overview`, {
+      headers: adminAuthHeader,
+    });
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.data.metrics.totalResources).toBe(1);
     expect(body.data.metrics.availableResources).toBe(1);
   });
 });
-

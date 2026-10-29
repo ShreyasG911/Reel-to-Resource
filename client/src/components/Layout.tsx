@@ -11,12 +11,16 @@ import {
   ExternalLink,
   ShieldCheck,
   AlertTriangle,
+  LogOut,
+  User,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { IntegrationStatus } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 export const Layout: React.FC = () => {
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
+  const { admin, logout } = useAuth();
   const location = useLocation();
 
   useEffect(() => {
@@ -52,30 +56,43 @@ export const Layout: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3 sm:space-x-4">
               {/* Automation Engine Status Badge */}
               {status && (
-                <div className="flex items-center space-x-2">
+                <div className="hidden sm:flex items-center space-x-2">
                   {status.simulationMode ? (
                     <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
                       <span className="w-2 h-2 mr-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                      Simulation Mode Active
+                      Simulation Mode
                     </span>
                   ) : status.readinessStatus === 'ready' ? (
                     <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
                       <span className="w-2 h-2 mr-1.5 rounded-full bg-emerald-500"></span>
-                      Meta API Connected
+                      Meta Live
                     </span>
                   ) : (
                     <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                       <AlertTriangle className="w-3.5 h-3.5 mr-1 text-slate-500" />
-                      Local Setup Only
+                      Local Setup
                     </span>
                   )}
+                </div>
+              )}
 
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${status.autoReplyEnabled ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                    Replies: {status.autoReplyEnabled ? 'ON' : 'OFF'}
-                  </span>
+              {/* Administrator Profile & Logout Button */}
+              {admin && (
+                <div className="flex items-center space-x-2 border-l border-slate-200 pl-3">
+                  <div className="flex items-center text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg">
+                    <User className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+                    <span>{admin.username}</span>
+                  </div>
+                  <button
+                    onClick={logout}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    title="Sign Out"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
                 </div>
               )}
             </div>
@@ -120,7 +137,7 @@ export const Layout: React.FC = () => {
           <span>Reel to Resource Matcher &copy; 2026 &bull; Production-grade self-hosted Instagram DM automation</span>
           <div className="flex items-center space-x-4">
             <span className="flex items-center text-slate-600">
-              <ShieldCheck className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Exact Matching &bull; No AI Hallucinations
+              <ShieldCheck className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Authenticated &bull; Exact Matching
             </span>
           </div>
         </div>
@@ -128,4 +145,3 @@ export const Layout: React.FC = () => {
     </div>
   );
 };
-

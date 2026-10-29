@@ -2,8 +2,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
 import { Resource } from '../src/models/Resource.js';
 import { IntegrationSetting } from '../src/models/IntegrationSetting.js';
+import { AdminUser } from '../src/models/AdminUser.js';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/reel_to_resource';
 
@@ -93,6 +95,17 @@ async function seed() {
     connectedAccount: {
       status: 'unconfigured',
     },
+  });
+
+  console.log('[Seed] Provisioning initial Administrator account...');
+  await AdminUser.deleteMany({});
+  const defaultAdminUser = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase();
+  const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPassword123!';
+  const passwordHash = await bcrypt.hash(defaultAdminPassword, 12);
+  await AdminUser.create({
+    username: defaultAdminUser,
+    passwordHash,
+    role: 'admin',
   });
 
   console.log('\n' + '='.repeat(80));

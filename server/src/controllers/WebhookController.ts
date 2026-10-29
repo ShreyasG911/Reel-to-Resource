@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { EventProcessorService } from '../services/EventProcessorService';
+import { EventWorkerService } from '../services/EventWorkerService';
 import { InstagramWebhookPayload } from '../types/instagram';
 
 export class WebhookController {
@@ -24,40 +24,46 @@ export class WebhookController {
 
   /**
    * Handles incoming webhook event notifications: POST /api/v1/webhooks/instagram
+   * Persists events durably into MongoDB before acknowledging with 200 OK.
    */
   public static async handleEvent(req: Request, res: Response): Promise<void> {
     const payload = req.body as InstagramWebhookPayload;
 
-    // Immediately acknowledge Meta with 200 OK to prevent delivery timeouts & retries
-    res.status(200).json({ status: 'ok', received: true });
-
     // Validate that payload belongs to instagram object
     if (!payload || payload.object !== 'instagram' || !Array.isArray(payload.entry)) {
+      res.status(200).json({ status: 'ignored', reason: 'Non-instagram webhook object' });
       return;
     }
 
-    // Process messaging events asynchronously
+    // Step 1: Durably persist/enqueue all valid incoming events before acknowledgment
     for (const entry of payload.entry) {
       if (!Array.isArray(entry.messaging)) continue;
 
       for (const event of entry.messaging) {
-        // Skip echo events (messages dispatched by our own account)
+        // Skip echo messages sent by our own account
         if ((event.message as any)?.is_echo) {
           continue;
         }
 
         // Only process incoming messages (skip read receipts, delivery confirmations, reactions)
-        if (!event.message) {
+        if (!event.message || !event.message.mid) {
           continue;
         }
 
         try {
-          await EventProcessorService.processEvent(event);
+          await EventWorkerService.enqueueEvent(event);
         } catch (err: any) {
-          console.error(`[WebhookController] Failed to process event ${event.message.mid}:`, err.message);
+          console.error(`[WebhookController] Failed to enqueue event ${event.message.mid}:`, err.message);
         }
       }
     }
+
+    // Step 2: Acknowledge Meta with 200 OK after durable event persistence
+    res.status(200).json({ status: 'ok', received: true });
+
+    // Step 3: Trigger durable worker processing asynchronously
+    EventWorkerService.processPendingQueue().catch((err) => {
+      console.error('[WebhookController] Background event worker error:', err);
+    });
   }
 }
-

@@ -2,14 +2,13 @@ import mongoose, { Document, Schema } from 'mongoose';
 import { ReelIdentificationStatus } from '../types/instagram';
 
 export type EventProcessingStatus =
-  | 'received'
-  | 'ignored'
+  | 'pending'
   | 'processing'
-  | 'identified'
   | 'matched'
   | 'not_found'
   | 'unavailable'
   | 'unsupported_share'
+  | 'ignored'
   | 'reply_pending'
   | 'reply_sent'
   | 'reply_failed'
@@ -23,8 +22,11 @@ export interface IAutomationEvent extends Document {
   messageType: string;
   extractedReelId?: string;
   extractedCanonicalUrl?: string;
+  numericMediaId?: string;
   identificationStatus: ReelIdentificationStatus;
   processingStatus: EventProcessingStatus;
+  lockedAt?: Date;
+  retryCount: number;
   matchResult?: {
     resourceId?: mongoose.Types.ObjectId;
     resourceUrl?: string;
@@ -34,6 +36,7 @@ export interface IAutomationEvent extends Document {
   errorCode?: string;
   errorDetails?: string;
   rawPayloadSummary?: Record<string, unknown>;
+  rawEventPayload?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -72,30 +75,41 @@ const AutomationEventSchema = new Schema<IAutomationEvent>(
     extractedCanonicalUrl: {
       type: String,
     },
+    numericMediaId: {
+      type: String,
+      index: true,
+    },
     identificationStatus: {
       type: String,
       enum: ['identified', 'unsupported_share', 'missing_identifier', 'invalid_identifier'],
-      required: true,
+      default: 'missing_identifier',
       index: true,
     },
     processingStatus: {
       type: String,
       enum: [
-        'received',
-        'ignored',
+        'pending',
         'processing',
-        'identified',
         'matched',
         'not_found',
         'unavailable',
         'unsupported_share',
+        'ignored',
         'reply_pending',
         'reply_sent',
         'reply_failed',
         'duplicate',
       ],
-      default: 'received',
+      default: 'pending',
       index: true,
+    },
+    lockedAt: {
+      type: Date,
+      index: true,
+    },
+    retryCount: {
+      type: Number,
+      default: 0,
     },
     matchResult: {
       resourceId: {
@@ -115,6 +129,10 @@ const AutomationEventSchema = new Schema<IAutomationEvent>(
       type: Schema.Types.Mixed,
       default: {},
     },
+    rawEventPayload: {
+      type: Schema.Types.Mixed,
+      default: {},
+    },
   },
   {
     timestamps: true,
@@ -123,9 +141,9 @@ const AutomationEventSchema = new Schema<IAutomationEvent>(
 
 AutomationEventSchema.index({ createdAt: -1 });
 AutomationEventSchema.index({ senderId: 1, createdAt: -1 });
+AutomationEventSchema.index({ processingStatus: 1, lockedAt: 1 });
 
 export const AutomationEvent = mongoose.model<IAutomationEvent>(
   'AutomationEvent',
   AutomationEventSchema
 );
-

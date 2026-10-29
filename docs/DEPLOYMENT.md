@@ -36,7 +36,12 @@ docker compose up -d --build
 ```
 This builds the unified production container and initializes the MongoDB database with persistent volume storage.
 
-### Step 3: Seed Demonstration Data (Optional)
+### Step 3: Provision Administrator Credentials
+The dashboard requires an authenticated administrator:
+```bash
+docker compose exec app npm run admin:create admin "YourSuperSecurePassword123!"
+```
+Alternatively, seeding demo data will provision an initial `admin` / `AdminPass123!` account (remember to change or recreate in production):
 ```bash
 docker compose exec app npm run seed
 ```

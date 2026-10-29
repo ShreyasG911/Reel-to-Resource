@@ -10,23 +10,65 @@ import {
 
 const API_BASE = '/api/v1';
 
+export function getAuthToken(): string | null {
+  return localStorage.getItem('admin_token');
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem('admin_token', token);
+}
+
+export function removeAuthToken(): void {
+  localStorage.removeItem('admin_token');
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
   });
 
   const data = await res.json();
   if (!res.ok) {
+    if (res.status === 401 && !url.includes('/auth/login')) {
+      removeAuthToken();
+      window.dispatchEvent(new Event('auth:unauthorized'));
+    }
     throw new Error(data.error || data.details || `Request failed with status ${res.status}`);
   }
   return data;
 }
 
 export const api = {
+  // Authentication
+  login: (username: string, password: string) =>
+    fetchJson<{ token: string; admin: { id: string; username: string; role: string } }>(
+      `${API_BASE}/auth/login`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }
+    ),
+
+  getMe: () =>
+    fetchJson<{ admin: { id: string; username: string; role: string } }>(`${API_BASE}/auth/me`),
+
+  logout: () =>
+    fetchJson<{ message: string }>(`${API_BASE}/auth/logout`, { method: 'POST' }),
+
+  getSetupStatus: () =>
+    fetchJson<{ hasAdmin: boolean }>(`${API_BASE}/auth/setup-status`),
+
   // Resources
   getResources: (params?: { page?: number; limit?: number; search?: string; resourceType?: string; isAvailable?: string; status?: string }) => {
     const qs = new URLSearchParams();
@@ -103,7 +145,12 @@ export const api = {
   getIntegrationStatus: () =>
     fetchJson<{ data: IntegrationStatus }>(`${API_BASE}/integration/status`),
 
+  verifyCredentials: () =>
+    fetchJson<{ success: boolean; verified: boolean; data?: any; error?: string }>(
+      `${API_BASE}/integration/verify-credentials`,
+      { method: 'POST' }
+    ),
+
   getOverview: () =>
     fetchJson<{ data: OverviewMetrics }>(`${API_BASE}/analytics/overview`),
 };
-

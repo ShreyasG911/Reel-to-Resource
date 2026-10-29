@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { AutomationEvent } from '../models/AutomationEvent';
 import { ReplyLog } from '../models/ReplyLog';
+import { escapeRegex } from '../utils/validation';
 
 export class EventsController {
   /**
@@ -25,10 +26,11 @@ export class EventsController {
       }
 
       if (search) {
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { providerMessageId: { $regex: search, $options: 'i' } },
-          { senderId: { $regex: search, $options: 'i' } },
-          { extractedReelId: { $regex: search, $options: 'i' } },
+          { providerMessageId: { $regex: safeSearch, $options: 'i' } },
+          { senderId: { $regex: safeSearch, $options: 'i' } },
+          { extractedReelId: { $regex: safeSearch, $options: 'i' } },
         ];
       }
 

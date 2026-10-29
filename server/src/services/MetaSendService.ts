@@ -15,6 +15,7 @@ export interface SendMessageResult {
   deliveryStatus: 'delivered_to_api' | 'simulated' | 'failed';
   providerMessageId?: string;
   error?: string;
+  errorCode?: string;
   isTransient?: boolean;
   attemptsMade: number;
 }
@@ -39,9 +40,9 @@ export class MetaSendService {
 
     const settings = await IntegrationSetting.findOne({ singletonKey: 'global_settings' });
     const maxRetries = settings?.maxRetryAttempts || 3;
-    const isSimulation = settings?.simulationMode || process.env.SIMULATION_MODE === 'true';
+    const isSimulation = settings?.simulationMode === true || process.env.SIMULATION_MODE === 'true';
 
-    // 1. Messaging Window Guard
+    // 1. Messaging Window Guard (enforced across both live and simulated modes)
     if (!this.isWithinMessagingWindow(eventTimestamp)) {
       const errorMsg = 'Messaging window expired: Instagram Send API only permits replies within 24 hours of incoming message.';
       await this.updateFailureRecords(replyLogId, eventId, errorMsg, 1);
@@ -54,9 +55,8 @@ export class MetaSendService {
       };
     }
 
-    // 2. Simulation Mode Guard
-    const accessToken = process.env.META_PAGE_ACCESS_TOKEN;
-    if (isSimulation || !accessToken) {
+    // 2. Simulation Mode Guard (explicitly enabled only)
+    if (isSimulation) {
       const simulatedMid = `sim_mid_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       await ReplyLog.updateOne(
         { _id: replyLogId },
@@ -81,7 +81,22 @@ export class MetaSendService {
       };
     }
 
-    // 3. Live Meta Send API Call with Bounded Retries
+    // 3. Credential Verification Guard (Live mode requires valid token; never silently simulates)
+    const accessToken = process.env.META_PAGE_ACCESS_TOKEN;
+    if (!accessToken) {
+      const errorMsg = 'Configuration Error: META_PAGE_ACCESS_TOKEN is missing. Set META_PAGE_ACCESS_TOKEN in .env or enable Simulation Mode in settings.';
+      await this.updateFailureRecords(replyLogId, eventId, errorMsg, 1);
+      return {
+        success: false,
+        deliveryStatus: 'failed',
+        error: errorMsg,
+        errorCode: 'MISSING_PAGE_ACCESS_TOKEN',
+        isTransient: false,
+        attemptsMade: 1,
+      };
+    }
+
+    // 4. Live Meta Send API Call with Bounded Retries
     const apiVersion = process.env.META_GRAPH_API_VERSION || 'v21.0';
     const endpoint = `https://graph.facebook.com/${apiVersion}/me/messages`;
 
@@ -173,6 +188,47 @@ export class MetaSendService {
     };
   }
 
+  /**
+   * Validates configured Meta credentials against the Graph API /me endpoint.
+   */
+  public static async verifyCredentials(): Promise<{
+    valid: boolean;
+    accountId?: string;
+    accountName?: string;
+    error?: string;
+  }> {
+    const accessToken = process.env.META_PAGE_ACCESS_TOKEN;
+    if (!accessToken) {
+      return { valid: false, error: 'META_PAGE_ACCESS_TOKEN is not configured in environment' };
+    }
+
+    const apiVersion = process.env.META_GRAPH_API_VERSION || 'v21.0';
+    const endpoint = `https://graph.facebook.com/${apiVersion}/me?fields=id,name&access_token=${accessToken}`;
+
+    try {
+      const response = await fetch(endpoint);
+      const data: any = await response.json();
+
+      if (response.ok && data?.id) {
+        return {
+          valid: true,
+          accountId: data.id,
+          accountName: data.name,
+        };
+      }
+
+      return {
+        valid: false,
+        error: data?.error?.message || `HTTP ${response.status} verification failure`,
+      };
+    } catch (err: any) {
+      return {
+        valid: false,
+        error: `Network error verifying credentials: ${err.message}`,
+      };
+    }
+  }
+
   private static async updateFailureRecords(
     replyLogId: string,
     eventId: string,
@@ -201,4 +257,3 @@ export class MetaSendService {
     );
   }
 }
-

@@ -103,6 +103,42 @@ describe('MetaSendService', () => {
     expect(updatedReply?.deliveryStatus).toBe('simulated');
   });
 
+  it('fails with MISSING_PAGE_ACCESS_TOKEN when access token is unset and simulation is off', async () => {
+    delete process.env.META_PAGE_ACCESS_TOKEN;
+    process.env.SIMULATION_MODE = 'false';
+
+    const event = await AutomationEvent.create({
+      providerMessageId: 'mid_no_token',
+      senderId: 'ig_user_no_token',
+      recipientId: 'page_123',
+      eventTimestamp: Date.now(),
+      messageType: 'attachment_url',
+      identificationStatus: 'identified',
+      processingStatus: 'processing',
+    });
+
+    const replyLog = await ReplyLog.create({
+      eventId: event._id,
+      recipientId: 'ig_user_no_token',
+      replyType: 'resource_found',
+      renderedMessage: 'No token test',
+      deliveryStatus: 'pending',
+    });
+
+    const result = await MetaSendService.sendDirectMessage({
+      replyLogId: (replyLog._id as any).toString(),
+      recipientId: 'ig_user_no_token',
+      messageText: 'No token test',
+      eventTimestamp: Date.now(),
+      eventId: (event._id as any).toString(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.deliveryStatus).toBe('failed');
+    expect(result.errorCode).toBe('MISSING_PAGE_ACCESS_TOKEN');
+    expect(result.error).toContain('META_PAGE_ACCESS_TOKEN is missing');
+  });
+
   it('fails fast on permanent Meta API error (e.g. 403 Forbidden)', async () => {
     process.env.META_PAGE_ACCESS_TOKEN = 'mock_invalid_token';
 

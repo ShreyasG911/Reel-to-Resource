@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import { Resource } from '../models/Resource';
 import { ReelIdentifierAdapter } from '../adapters/ReelIdentifierAdapter';
+import { escapeRegex, validateResourceInput, isValidDestinationUrl } from '../utils/validation';
 
 export class ResourceController {
   /**
    * GET /api/v1/resources
-   * List resources with pagination, search, and filtering.
+   * List resources with pagination, escaped search, and filtering.
    */
   public static async list(req: Request, res: Response): Promise<void> {
     try {
@@ -19,15 +20,16 @@ export class ResourceController {
       const query: any = {};
 
       if (search) {
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { title: { $regex: search, $options: 'i' } },
-          { reelId: { $regex: search, $options: 'i' } },
-          { tags: { $in: [new RegExp(search, 'i')] } },
+          { title: { $regex: safeSearch, $options: 'i' } },
+          { reelId: { $regex: safeSearch, $options: 'i' } },
+          { tags: { $in: [new RegExp(safeSearch, 'i')] } },
         ];
       }
 
       if (resourceType) {
-        query.resourceType = resourceType;
+        query.resourceType = resourceType.toLowerCase();
       }
 
       if (isAvailable !== undefined && isAvailable !== '') {
@@ -35,7 +37,7 @@ export class ResourceController {
       }
 
       if (status) {
-        query.status = status;
+        query.status = status.toLowerCase();
       }
 
       const total = await Resource.countDocuments(query);
@@ -77,67 +79,73 @@ export class ResourceController {
 
   /**
    * POST /api/v1/resources
-   * Create a new resource with normalization & duplicate Reel ID checks.
+   * Create a new resource with strict validation & duplicate Reel ID protection.
    */
   public static async create(req: Request, res: Response): Promise<void> {
     try {
-      const { title, description, reelId, resourceUrl, resourceType, tags, isAvailable, status, aliases } = req.body;
-
-      if (!title || !title.trim()) {
-        res.status(400).json({ error: 'Resource title is required' });
-        return;
-      }
-
-      if (!reelId || !reelId.trim()) {
-        res.status(400).json({ error: 'Reel ID or shortcode is required' });
-        return;
-      }
-
-      if (!resourceUrl || !resourceUrl.trim()) {
-        res.status(400).json({ error: 'Destination resource URL is required' });
-        return;
-      }
-
-      // Extract shortcode if user pasted a full URL instead of raw shortcode
-      let normalizedReelId = reelId.trim();
-      const extractedShortcode = ReelIdentifierAdapter.extractShortcode(normalizedReelId);
+      let candidateReelId = (req.body.reelId || '').trim();
+      const extractedShortcode = ReelIdentifierAdapter.extractShortcode(candidateReelId);
       if (extractedShortcode) {
-        normalizedReelId = extractedShortcode;
+        candidateReelId = extractedShortcode;
       }
 
-      if (!ReelIdentifierAdapter.isValidShortcode(normalizedReelId)) {
+      const payload = {
+        ...req.body,
+        reelId: candidateReelId,
+      };
+
+      const validation = validateResourceInput(payload);
+      if (!validation.valid || !validation.sanitized) {
         res.status(400).json({
-          error: `Invalid Reel identifier "${normalizedReelId}". Must be 3-50 alphanumeric characters (including dashes/underscores).`,
+          error: 'Validation failed',
+          details: validation.errors,
         });
         return;
       }
 
-      // Check for duplicate Reel ID
-      const existing = await Resource.findOne({ reelId: normalizedReelId });
+      const sanitized = validation.sanitized;
+
+      if (!ReelIdentifierAdapter.isValidShortcode(sanitized.reelId)) {
+        res.status(400).json({
+          error: `Invalid Reel identifier "${sanitized.reelId}". Must be 3-50 alphanumeric characters.`,
+        });
+        return;
+      }
+
+      // Check existing to provide a friendly message before DB write
+      const existing = await Resource.findOne({ reelId: sanitized.reelId });
       if (existing) {
         res.status(409).json({
-          error: `A resource is already registered for Reel ID "${normalizedReelId}" ("${existing.title}")`,
+          error: `A resource is already registered for Reel ID "${sanitized.reelId}" ("${existing.title}")`,
+          code: 'DUPLICATE_REEL_ID',
         });
         return;
       }
 
-      const canonicalReelUrl = ReelIdentifierAdapter.toCanonicalUrl(normalizedReelId);
+      const canonicalReelUrl = ReelIdentifierAdapter.toCanonicalUrl(sanitized.reelId);
 
       const newResource = await Resource.create({
-        title: title.trim(),
-        description: description?.trim(),
-        reelId: normalizedReelId,
+        title: sanitized.title,
+        description: sanitized.description,
+        reelId: sanitized.reelId,
         canonicalReelUrl,
-        resourceUrl: resourceUrl.trim(),
-        resourceType: resourceType || 'link',
-        tags: Array.isArray(tags) ? tags.map((t: string) => t.trim().toLowerCase()) : [],
-        isAvailable: isAvailable !== undefined ? Boolean(isAvailable) : true,
-        status: status || 'active',
-        aliases: Array.isArray(aliases) ? aliases.map((a: string) => a.trim()) : [],
+        resourceUrl: sanitized.resourceUrl,
+        resourceType: sanitized.resourceType,
+        tags: sanitized.tags,
+        isAvailable: sanitized.isAvailable,
+        status: sanitized.status,
+        aliases: sanitized.aliases,
       });
 
       res.status(201).json({ data: newResource });
     } catch (err: any) {
+      if (err.code === 11000) {
+        res.status(409).json({
+          error: 'A resource with this Reel identifier already exists (concurrent insert conflict).',
+          code: 'DUPLICATE_REEL_ID',
+        });
+        return;
+      }
       res.status(500).json({ error: 'Failed to create resource', details: err.message });
     }
   }
@@ -148,22 +156,76 @@ export class ResourceController {
   public static async update(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { title, description, resourceUrl, resourceType, tags, isAvailable, status, aliases } = req.body;
-
       const resource = await Resource.findById(id);
       if (!resource) {
         res.status(404).json({ error: 'Resource not found' });
         return;
       }
 
-      if (title !== undefined) resource.title = title.trim();
-      if (description !== undefined) resource.description = description.trim();
-      if (resourceUrl !== undefined) resource.resourceUrl = resourceUrl.trim();
-      if (resourceType !== undefined) resource.resourceType = resourceType;
-      if (tags !== undefined) resource.tags = Array.isArray(tags) ? tags.map((t: string) => t.trim().toLowerCase()) : [];
-      if (isAvailable !== undefined) resource.isAvailable = Boolean(isAvailable);
-      if (status !== undefined) resource.status = status;
-      if (aliases !== undefined) resource.aliases = Array.isArray(aliases) ? aliases.map((a: string) => a.trim()) : [];
+      const { title, description, resourceUrl, resourceType, tags, isAvailable, status, aliases } = req.body;
+
+      if (title !== undefined) {
+        const trimmed = String(title).trim();
+        if (!trimmed || trimmed.length > 200) {
+          res.status(400).json({ error: 'Title must be between 1 and 200 characters' });
+          return;
+        }
+        resource.title = trimmed;
+      }
+
+      if (description !== undefined) {
+        const trimmedDesc = String(description).trim();
+        if (trimmedDesc.length > 1000) {
+          res.status(400).json({ error: 'Description cannot exceed 1000 characters' });
+          return;
+        }
+        resource.description = trimmedDesc;
+      }
+
+      if (resourceUrl !== undefined) {
+        const trimmedUrl = String(resourceUrl).trim();
+        if (!isValidDestinationUrl(trimmedUrl)) {
+          res.status(400).json({ error: 'Resource URL must be a valid HTTP or HTTPS destination link' });
+          return;
+        }
+        resource.resourceUrl = trimmedUrl;
+      }
+
+      if (resourceType !== undefined) {
+        const allowed = ['template', 'guide', 'preset', 'code', 'link', 'other'];
+        const typeLower = String(resourceType).toLowerCase();
+        if (!allowed.includes(typeLower)) {
+          res.status(400).json({ error: `Invalid resource type. Allowed: ${allowed.join(', ')}` });
+          return;
+        }
+        resource.resourceType = typeLower as any;
+      }
+
+      if (status !== undefined) {
+        const allowedStatuses = ['active', 'draft', 'archived'];
+        const statusLower = String(status).toLowerCase();
+        if (!allowedStatuses.includes(statusLower)) {
+          res.status(400).json({ error: `Invalid status. Allowed: ${allowedStatuses.join(', ')}` });
+          return;
+        }
+        resource.status = statusLower as any;
+      }
+
+      if (tags !== undefined) {
+        resource.tags = Array.isArray(tags)
+          ? tags.map((t: any) => String(t).trim().toLowerCase()).filter((t: string) => t.length > 0 && t.length <= 30).slice(0, 50)
+          : [];
+      }
+
+      if (isAvailable !== undefined) {
+        resource.isAvailable = Boolean(isAvailable);
+      }
+
+      if (aliases !== undefined) {
+        resource.aliases = Array.isArray(aliases)
+          ? aliases.map((a: any) => String(a).trim()).filter((a: string) => a.length > 0 && a.length <= 50).slice(0, 20)
+          : [];
+      }
 
       await resource.save();
 
@@ -189,4 +251,3 @@ export class ResourceController {
     }
   }
 }
-

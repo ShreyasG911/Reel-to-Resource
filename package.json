@@ -10,6 +10,7 @@
     "build": "npm run build:server && npm run build:client",
     "start": "npm --prefix server start",
     "seed": "npm --prefix server run seed",
+    "admin:create": "npm --prefix server run admin:create",
     "test": "npm --prefix server test",
     "cli:test-payload": "npm --prefix server run cli:test-payload",
     "cli:simulate-webhook": "npm --prefix server run cli:simulate-webhook"

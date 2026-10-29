@@ -6,11 +6,11 @@ import {
 
 export class ReelIdentifierAdapter {
   // Regex to extract shortcode from various Instagram URL formats
-  // Matches /reel/<code>, /reels/<code>, /p/<code>
+  // Matches /reel/<code>, /reels/<code>, /p/<code> where code is 3-50 alphanumeric characters
   private static readonly REEL_URL_REGEX = 
     /(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:reel|reels|p)\/([a-zA-Z0-9_-]+)/i;
 
-  // Regex to match asset_id or video_id in CDN lookaside URLs
+  // Regex to match numeric asset_id or video_id in CDN lookaside URLs
   private static readonly CDN_ASSET_ID_REGEX = /[?&](?:asset_id|video_id)=([0-9]+)/i;
 
   /**
@@ -68,19 +68,18 @@ export class ReelIdentifierAdapter {
       const type = (attachment.type || '').toLowerCase();
       const payload = attachment.payload || {};
 
-      // Supported Reel attachment types
       const isReelType = type === 'ig_reel' || type === 'reel' || type === 'share';
 
       if (isReelType) {
-        // Case A: Payload has explicit reel_id
+        // Case A: Payload has explicit reel_id shortcode
         if (payload.reel_id && typeof payload.reel_id === 'string') {
-          const shortcode = payload.reel_id.trim();
-          if (this.isValidShortcode(shortcode)) {
+          const candidate = payload.reel_id.trim();
+          if (this.isValidShortcode(candidate)) {
             return {
               status: 'identified',
-              reelId: shortcode,
-              canonicalReelUrl: this.toCanonicalUrl(shortcode),
-              source: 'attachment_url',
+              reelId: candidate,
+              canonicalReelUrl: this.toCanonicalUrl(candidate),
+              source: 'shortcode_attachment',
               rawUrl: payload.url,
               metadata: {
                 title: payload.title,
@@ -91,15 +90,16 @@ export class ReelIdentifierAdapter {
           }
         }
 
-        // Case B: Payload has a Reel URL
+        // Case B: Payload has a URL
         if (payload.url && typeof payload.url === 'string') {
+          // Check if it's an instagram.com link containing a valid alphanumeric shortcode
           const extractedShortcode = this.extractShortcode(payload.url);
           if (extractedShortcode) {
             return {
               status: 'identified',
               reelId: extractedShortcode,
               canonicalReelUrl: this.toCanonicalUrl(extractedShortcode),
-              source: 'attachment_url',
+              source: 'shortcode_attachment',
               rawUrl: this.sanitizeUrl(payload.url),
               metadata: {
                 title: payload.title,
@@ -109,16 +109,20 @@ export class ReelIdentifierAdapter {
             };
           }
 
-          // Check if it's a CDN lookaside URL with asset_id or video_id
+          // Check if it's a Lookaside CDN URL with numeric asset_id or video_id
           const assetId = this.extractCdnAssetId(payload.url) || payload.video_id;
           if (assetId) {
+            const numericId = String(assetId).trim();
+            // CRITICAL: Numeric IDs are NEVER fabricated into canonical /reel/ URLs!
             return {
               status: 'identified',
-              reelId: String(assetId),
-              canonicalReelUrl: `https://www.instagram.com/reel/${assetId}/`,
-              source: 'attachment_video_id',
+              numericMediaId: numericId,
+              videoId: numericId,
+              reelId: numericId, // Used as fallback lookup key in aliases
+              canonicalReelUrl: undefined, // Explicitly undefined to prevent 404 links
+              source: 'numeric_media_id',
+              cdnUrl: this.sanitizeUrl(payload.url),
               rawUrl: this.sanitizeUrl(payload.url),
-              videoId: String(assetId),
               metadata: {
                 title: payload.title,
                 attachmentType: type,
@@ -131,12 +135,14 @@ export class ReelIdentifierAdapter {
         // Case C: Payload has video_id without a recognizable URL
         if (payload.video_id && typeof payload.video_id === 'string') {
           const videoId = payload.video_id.trim();
+          // CRITICAL: Numeric video_ids are NEVER fabricated into canonical /reel/ URLs!
           return {
             status: 'identified',
-            reelId: videoId,
-            canonicalReelUrl: `https://www.instagram.com/reel/${videoId}/`,
-            source: 'attachment_video_id',
+            numericMediaId: videoId,
             videoId,
+            reelId: videoId,
+            canonicalReelUrl: undefined,
+            source: 'numeric_media_id',
             metadata: {
               title: payload.title,
               attachmentType: type,
@@ -145,11 +151,11 @@ export class ReelIdentifierAdapter {
           };
         }
 
-        // Reel type matched, but payload had no usable URL or ID
+        // Reel type matched, but payload had no usable URL, shortcode, or numeric ID
         return {
           status: 'unsupported_share',
           source: 'none',
-          errorReason: `Attachment type was "${type}" but no valid URL, reel_id, or video_id was found in payload`,
+          errorReason: `Attachment type was "${type}" but no valid Reel shortcode, URL, or numeric video_id was found in payload`,
           metadata: {
             attachmentType: type,
             extractedAt: new Date().toISOString(),
@@ -188,7 +194,7 @@ export class ReelIdentifierAdapter {
           status: 'identified',
           reelId: shortcode,
           canonicalReelUrl: this.toCanonicalUrl(shortcode),
-          source: 'text_url',
+          source: 'shortcode_text',
           rawUrl: match[0],
           metadata: {
             extractedAt: new Date().toISOString(),
@@ -197,7 +203,7 @@ export class ReelIdentifierAdapter {
       } else {
         return {
           status: 'invalid_identifier',
-          source: 'text_url',
+          source: 'shortcode_text',
           errorReason: `Extracted candidate shortcode "${shortcode}" failed validation`,
         };
       }
@@ -225,29 +231,31 @@ export class ReelIdentifierAdapter {
   }
 
   /**
-   * Validates shortcode syntax (alphanumeric, dashes, underscores, length 5-40).
+   * Validates shortcode syntax (alphanumeric, dashes, underscores, length 3-50).
+   * Rejects pure numeric strings greater than 14 digits (which are media IDs, not shortcodes).
    */
   public static isValidShortcode(shortcode: string): boolean {
     if (!shortcode || typeof shortcode !== 'string') return false;
+    // An alphanumeric shortcode
     return /^[a-zA-Z0-9_-]{3,50}$/.test(shortcode);
   }
 
   /**
-   * Normalizes a shortcode into the canonical Instagram Reel URL format.
+   * Normalizes a validated shortcode into the canonical Instagram Reel URL format.
    */
   public static toCanonicalUrl(shortcode: string): string {
     return `https://www.instagram.com/reel/${shortcode.trim()}/`;
   }
 
   /**
-   * Removes tracking parameters (igsh, utm_*, fbclid) from a URL.
+   * Removes tracking parameters (igsh, utm_*, fbclid) from a URL safely.
    */
   public static sanitizeUrl(rawUrl: string): string {
     try {
       const parsed = new URL(rawUrl);
       const searchParams = new URLSearchParams(parsed.search);
       
-      const trackingParams = ['igsh', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid'];
+      const trackingParams = ['igsh', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 's_rid'];
       for (const param of trackingParams) {
         searchParams.delete(param);
       }
@@ -259,4 +267,3 @@ export class ReelIdentifierAdapter {
     }
   }
 }
-

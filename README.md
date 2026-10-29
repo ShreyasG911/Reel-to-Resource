@@ -92,8 +92,12 @@ Key configuration parameters:
 | `META_PAGE_ACCESS_TOKEN` | Long-lived Page Access Token with `instagram_manage_messages` |
 | `SIMULATION_MODE` | Set `true` to test locally without calling live Meta API |
 
-### 3. Seed Demonstration Resources
-Populate your database with sample resources (templates, guides, code repos, unavailable presets):
+### 3. Provision Administrator Credentials & Seed Demo Data
+Create your initial administrator account:
+```bash
+npm run admin:create admin "YourStrongPassword123!"
+```
+Or run the seed script which populates sample resources and seeds an initial demo admin (`admin` / `AdminPass123!`):
 ```bash
 npm run seed
 ```
@@ -124,11 +128,11 @@ Test how the Reel Identification Adapter extracts shortcodes from raw links:
 npm run cli:test-payload "https://www.instagram.com/reel/C890_MySampleReel/?igsh=MWx1YnpqamVvMWQx"
 ```
 
-### 3. Automated Vitest Suite (38 Tests)
+### 3. Automated Vitest Suite (42 Tests)
 ```bash
 npm test
 ```
-Verifies URL sanitization, canonical normalization, 3-tier matching priority, availability gates, 24h messaging window rules, bounded retries, and REST endpoints.
+Verifies URL sanitization, canonical normalization, 3-tier matching priority, availability gates, 24h messaging window rules, missing token guard, atomic queue deduplication, administrator authentication & authorization, and REST endpoints.
 
 ---
 

@@ -1,6 +1,7 @@
 import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 import webhookRoutes from './routes/webhookRoutes';
@@ -27,6 +28,7 @@ export function createApp(): Express {
       },
     })
   );
+  app.use(cookieParser());
   app.use(express.urlencoded({ extended: true }));
 
   // Health-check endpoint

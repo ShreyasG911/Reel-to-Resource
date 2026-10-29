@@ -28,7 +28,7 @@ describe('ReelIdentifierAdapter', () => {
     expect(result.status).toBe('identified');
     expect(result.reelId).toBe('DC5aXYZ89ab');
     expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/DC5aXYZ89ab/');
-    expect(result.source).toBe('attachment_url');
+    expect(result.source).toBe('shortcode_attachment');
     expect(result.rawUrl).not.toContain('igsh');
     expect(result.rawUrl).not.toContain('utm_source');
     expect(result.metadata?.title).toBe('Top 10 Design Resources');
@@ -58,10 +58,10 @@ describe('ReelIdentifierAdapter', () => {
     expect(result.status).toBe('identified');
     expect(result.reelId).toBe('C890_testReel');
     expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/C890_testReel/');
-    expect(result.source).toBe('attachment_url');
+    expect(result.source).toBe('shortcode_attachment');
   });
 
-  it('identifies CDN lookaside URL by extracting asset_id/video_id', () => {
+  it('identifies CDN lookaside URL by extracting asset_id/video_id and NEVER fabricates canonical URL', () => {
     const event: InstagramMessagingEvent = {
       sender: { id: 'user_12345' },
       recipient: { id: 'page_67890' },
@@ -83,9 +83,11 @@ describe('ReelIdentifierAdapter', () => {
     const result = ReelIdentifierAdapter.identify(event);
 
     expect(result.status).toBe('identified');
+    expect(result.numericMediaId).toBe('18109567273171822');
     expect(result.reelId).toBe('18109567273171822');
-    expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/18109567273171822/');
-    expect(result.source).toBe('attachment_video_id');
+    // Critical: numeric IDs must not fabricate a 404 canonical URL
+    expect(result.canonicalReelUrl).toBeUndefined();
+    expect(result.source).toBe('numeric_media_id');
   });
 
   it('identifies a direct Reel URL pasted in text', () => {
@@ -104,7 +106,7 @@ describe('ReelIdentifierAdapter', () => {
     expect(result.status).toBe('identified');
     expect(result.reelId).toBe('C-xyz789_AB');
     expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/C-xyz789_AB/');
-    expect(result.source).toBe('text_url');
+    expect(result.source).toBe('shortcode_text');
   });
 
   it('identifies instagr.am short links in text', () => {

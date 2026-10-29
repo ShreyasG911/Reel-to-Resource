@@ -9,6 +9,9 @@ export type ReelIdentificationStatus =
   | 'invalid_identifier';
 
 export type IdentificationSource = 
+  | 'shortcode_attachment'
+  | 'shortcode_text'
+  | 'numeric_media_id'
   | 'attachment_url'
   | 'attachment_video_id'
   | 'text_url'
@@ -16,11 +19,13 @@ export type IdentificationSource =
 
 export interface ReelIdentificationResult {
   status: ReelIdentificationStatus;
-  reelId?: string;
-  canonicalReelUrl?: string;
+  reelId?: string;               // Alphanumeric shortcode (e.g. "DC5aXYZ89ab")
+  canonicalReelUrl?: string;     // Canonical URL built ONLY from verified shortcode: https://www.instagram.com/reel/{shortcode}/
+  numericMediaId?: string;       // Numeric Meta video/media identifier (e.g. "18109567273171822") - NEVER fabricated into a canonical URL
   source: IdentificationSource;
-  rawUrl?: string;
-  videoId?: string;
+  rawUrl?: string;               // Sanitized incoming URL if provided
+  cdnUrl?: string;               // Lookaside CDN wrapper URL if provided
+  videoId?: string;              // Alias for numericMediaId
   errorReason?: string;
   metadata?: {
     title?: string;
@@ -87,4 +92,3 @@ export interface InstagramWebhookPayload {
   object: 'instagram' | string;
   entry?: InstagramWebhookEntry[];
 }
-

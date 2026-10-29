@@ -3,6 +3,7 @@ import { Resource } from '../models/Resource';
 import { AutomationEvent } from '../models/AutomationEvent';
 import { ReplyLog } from '../models/ReplyLog';
 import { IntegrationSetting } from '../models/IntegrationSetting';
+import { MetaSendService } from '../services/MetaSendService';
 
 export class IntegrationController {
   /**
@@ -36,17 +37,78 @@ export class IntegrationController {
       res.status(200).json({
         data: {
           readinessStatus,
-          simulationMode: settings?.simulationMode || process.env.SIMULATION_MODE === 'true',
+          simulationMode: settings?.simulationMode === true || process.env.SIMULATION_MODE === 'true',
           autoReplyEnabled: settings?.autoReplyEnabled ?? true,
           graphApiVersion: process.env.META_GRAPH_API_VERSION || 'v21.0',
           instagramAccountId: envChecks.INSTAGRAM_ACCOUNT_ID ? process.env.INSTAGRAM_ACCOUNT_ID : null,
           environmentChecklist: envChecks,
           webhookEndpoint: '/api/v1/webhooks/instagram',
           connectedAccount: settings?.connectedAccount || { status: 'unconfigured' },
+          verificationCategories: {
+            configuration: readinessStatus,
+            credentialValidity: envChecks.META_PAGE_ACCESS_TOKEN ? 'configured' : 'missing',
+            webhookEndpoint: 'available',
+            simulationMode: (settings?.simulationMode === true || process.env.SIMULATION_MODE === 'true') ? 'active' : 'inactive',
+          },
         },
       });
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to retrieve integration status', details: err.message });
+    }
+  }
+
+  /**
+   * POST /api/v1/integration/verify-credentials
+   * Live validation of configured Meta Page Access Token against Graph API.
+   */
+  public static async verifyCredentials(_req: Request, res: Response): Promise<void> {
+    try {
+      const result = await MetaSendService.verifyCredentials();
+      if (result.valid) {
+        // Update connectedAccount status in database settings
+        await IntegrationSetting.updateOne(
+          { singletonKey: 'global_settings' },
+          {
+            $set: {
+              'connectedAccount.accountId': result.accountId,
+              'connectedAccount.username': result.accountName,
+              'connectedAccount.connectedAt': new Date(),
+              'connectedAccount.status': 'configured',
+              'connectedAccount.lastError': undefined,
+            },
+          },
+          { upsert: true }
+        );
+
+        res.status(200).json({
+          success: true,
+          verified: true,
+          data: {
+            accountId: result.accountId,
+            accountName: result.accountName,
+          },
+          message: 'Meta credentials verified successfully with Graph API.',
+        });
+      } else {
+        await IntegrationSetting.updateOne(
+          { singletonKey: 'global_settings' },
+          {
+            $set: {
+              'connectedAccount.status': 'error',
+              'connectedAccount.lastError': result.error,
+            },
+          },
+          { upsert: true }
+        );
+
+        res.status(400).json({
+          success: false,
+          verified: false,
+          error: result.error,
+        });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: 'Credential verification request failed', details: err.message });
     }
   }
 
@@ -105,4 +167,3 @@ export class IntegrationController {
     }
   }
 }
-
