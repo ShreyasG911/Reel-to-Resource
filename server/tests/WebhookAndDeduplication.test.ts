@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { createApp } from '../src/app';
@@ -7,6 +7,8 @@ import { AutomationEvent } from '../src/models/AutomationEvent';
 import { ReplyLog } from '../src/models/ReplyLog';
 import { IntegrationSetting } from '../src/models/IntegrationSetting';
 import { EventProcessorService } from '../src/services/EventProcessorService';
+import { EventWorkerService } from '../src/services/EventWorkerService';
+import { WebhookController } from '../src/controllers/WebhookController';
 import { InstagramMessagingEvent } from '../src/types/instagram';
 
 const TEST_DB_URI = 'mongodb://localhost:27017/reel_to_resource_webhook_test';
@@ -264,6 +266,125 @@ describe('Webhook Handshake, Signature Verification & Idempotency', () => {
     const recovered = await AutomationEvent.findById(crashedEvent._id);
     expect(recovered?.processingStatus).toBe('reply_sent');
     expect(recovered?.retryCount).toBeGreaterThan(0);
+  });
+
+  it('ignores is_echo: true messages from webhook without enqueueing or replying', async () => {
+    const req: any = {
+      body: {
+        object: 'instagram',
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: 'our_page_omega' },
+                recipient: { id: 'other_user' },
+                timestamp: Date.now(),
+                message: {
+                  mid: 'mid_echo_event_999',
+                  is_echo: true,
+                  text: 'Automated echo message sent by our page',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    let statusCode = 0;
+    const res: any = {
+      status: (code: number) => {
+        statusCode = code;
+        return res;
+      },
+      json: () => res,
+    };
+
+    await WebhookController.handleEvent(req, res);
+    expect(statusCode).toBe(200);
+
+    // Echo message must NEVER be persisted in AutomationEvent
+    const echoRecord = await AutomationEvent.findOne({ providerMessageId: 'mid_echo_event_999' });
+    expect(echoRecord).toBeNull();
+  });
+
+  it('returns 500 and avoids successful 200 acknowledgment if event persistence fails', async () => {
+    const enqueueSpy = vi.spyOn(EventWorkerService, 'enqueueEvent').mockRejectedValueOnce(
+      new Error('MongoDB replica set connection dropped')
+    );
+
+    const req: any = {
+      body: {
+        object: 'instagram',
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: 'user_fail_save' },
+                recipient: { id: 'our_page_omega' },
+                timestamp: Date.now(),
+                message: {
+                  mid: 'mid_persist_failure_001',
+                  text: 'https://instagram.com/reel/ICON_REEL_123/',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    let statusCode = 0;
+    let jsonBody: any = null;
+    const res: any = {
+      status: (code: number) => {
+        statusCode = code;
+        return res;
+      },
+      json: (data: any) => {
+        jsonBody = data;
+        return res;
+      },
+    };
+
+    await WebhookController.handleEvent(req, res);
+
+    expect(statusCode).toBe(500);
+    expect(jsonBody?.error).toContain('Database error persisting incoming webhook event');
+
+    enqueueSpy.mockRestore();
+  });
+
+  it('transitions crashed events with retryCount >= 3 to terminal reply_failed with EXHAUSTED_CRASH_RECOVERY', async () => {
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000);
+    const exhaustedEvent = await AutomationEvent.create({
+      providerMessageId: 'mid_exhausted_worker_003',
+      senderId: 'user_exhausted',
+      recipientId: 'our_page_omega',
+      eventTimestamp: Date.now(),
+      messageType: 'shortcode_attachment',
+      extractedReelId: 'ICON_REEL_123',
+      identificationStatus: 'identified',
+      processingStatus: 'processing',
+      lockedAt: sixMinutesAgo,
+      retryCount: 3, // Already reached retry limit
+      rawEventPayload: {
+        sender: { id: 'user_exhausted' },
+        recipient: { id: 'our_page_omega' },
+        timestamp: Date.now(),
+        message: {
+          mid: 'mid_exhausted_worker_003',
+          text: 'https://www.instagram.com/reel/ICON_REEL_123/',
+        },
+      },
+    });
+
+    await EventWorkerService.processPendingQueue();
+
+    const resultEvent = await AutomationEvent.findById(exhaustedEvent._id);
+    expect(resultEvent?.processingStatus).toBe('reply_failed');
+    expect(resultEvent?.errorCode).toBe('EXHAUSTED_CRASH_RECOVERY');
+    expect(resultEvent?.lockedAt).toBeUndefined();
   });
 });
 

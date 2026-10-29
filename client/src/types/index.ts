@@ -63,7 +63,7 @@ export interface ReplyLog {
   replyType: 'resource_found' | 'resource_not_found' | 'unsupported_reel' | 'resource_unavailable' | 'custom';
   resourceId?: any;
   renderedMessage: string;
-  deliveryStatus: 'pending' | 'delivered_to_api' | 'failed' | 'simulated';
+  deliveryStatus: 'pending' | 'delivered_to_api' | 'failed' | 'simulated' | 'uncertain_timeout';
   providerMessageId?: string;
   attemptCount: number;
   lastError?: string;
@@ -72,7 +72,7 @@ export interface ReplyLog {
 }
 
 export interface IntegrationStatus {
-  readinessStatus: 'ready' | 'partial' | 'unconfigured';
+  readinessStatus: 'ready' | 'partial' | 'unconfigured' | 'configured_unverified';
   simulationMode: boolean;
   autoReplyEnabled: boolean;
   graphApiVersion: string;

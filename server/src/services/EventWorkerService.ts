@@ -120,7 +120,9 @@ export class EventWorkerService {
         const matchResult = await ResourceMatcherService.match(
           idResult.reelId,
           idResult.canonicalReelUrl,
-          idResult.numericMediaId || idResult.videoId
+          idResult.numericMediaId || idResult.videoId,
+          idResult.reelShortcode,
+          idResult.numericMediaId
         );
 
         if (matchResult.status === 'matched' && matchResult.resource) {
@@ -217,7 +219,17 @@ export class EventWorkerService {
 
       const maxRetries = settings.maxRetryAttempts || 3;
       if (!sendResult.success) {
-        if (sendResult.isTransient && event.retryCount < maxRetries) {
+        if (sendResult.isAmbiguous) {
+          // Ambiguous delivery state (e.g. timeout waiting for Meta response).
+          // Meta Send API does not support client idempotency tokens, so automatic blind retry
+          // is aborted to prevent sending duplicate DMs to the user.
+          event.processingStatus = 'reply_failed';
+          event.lockedAt = undefined;
+          event.errorCode = sendResult.errorCode || 'AMBIGUOUS_SEND_TIMEOUT';
+          event.errorDetails = sendResult.error;
+          await event.save();
+          return false;
+        } else if (sendResult.isTransient && event.retryCount < maxRetries) {
           // Recoverable transient failure: schedule retry with backoff
           const backoffDelay = Math.min(60000, Math.pow(2, event.retryCount) * 1000);
           event.processingStatus = 'pending';
@@ -281,7 +293,25 @@ export class EventWorkerService {
           retryCount: { $lt: 3 },
         },
         {
-          $set: { processingStatus: 'pending', lockedAt: undefined },
+          $set: { processingStatus: 'pending' },
+          $unset: { lockedAt: 1 },
+        }
+      );
+
+      // 1b. Crash recovery: transition stuck events that have exhausted retries to reply_failed
+      await AutomationEvent.updateMany(
+        {
+          processingStatus: 'processing',
+          lockedAt: { $lt: fiveMinutesAgo },
+          retryCount: { $gte: 3 },
+        },
+        {
+          $set: {
+            processingStatus: 'reply_failed',
+            errorCode: 'EXHAUSTED_CRASH_RECOVERY',
+            errorDetails: 'Event timed out in processing state and has exhausted retry attempts.',
+          },
+          $unset: { lockedAt: 1 },
         }
       );
 

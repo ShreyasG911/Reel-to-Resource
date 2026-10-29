@@ -115,5 +115,27 @@ describe('ResourceMatcherService', () => {
     expect(result.status).toBe('not_found');
     expect(result.resource).toBeUndefined();
   });
+
+  it('matches Priority 1: exact numeric media ID', async () => {
+    const result = await ResourceMatcherService.match(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '18109567273171822'
+    );
+
+    expect(result.matchFound).toBe(true);
+    expect(result.status).toBe('matched');
+    expect(result.matchedBy).toBe('numericMediaId');
+    expect(result.resource?.title).toBe('Complete Web Design Checklist');
+  });
+
+  it('strictly rejects matching by caption/title similarity (zero fuzzy hallucination)', async () => {
+    const result = await ResourceMatcherService.match('Complete Web Design Checklist');
+    expect(result.matchFound).toBe(false);
+    expect(result.status).toBe('not_found');
+    expect(result.resource).toBeUndefined();
+  });
 });
 

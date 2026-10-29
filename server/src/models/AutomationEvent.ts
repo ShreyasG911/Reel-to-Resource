@@ -33,7 +33,7 @@ export interface IAutomationEvent extends Document {
     resourceId?: mongoose.Types.ObjectId;
     resourceUrl?: string;
     title?: string;
-    matchedBy?: 'reelId' | 'canonicalReelUrl' | 'alias';
+    matchedBy?: 'reelId' | 'canonicalReelUrl' | 'alias' | 'numericMediaId' | 'reelShortcode';
   };
   errorCode?: string;
   errorDetails?: string;
@@ -130,7 +130,7 @@ const AutomationEventSchema = new Schema<IAutomationEvent>(
       title: String,
       matchedBy: {
         type: String,
-        enum: ['reelId', 'canonicalReelUrl', 'alias'],
+        enum: ['reelId', 'canonicalReelUrl', 'alias', 'numericMediaId', 'reelShortcode'],
       },
     },
     errorCode: String,

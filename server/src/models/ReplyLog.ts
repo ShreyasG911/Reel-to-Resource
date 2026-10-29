@@ -11,7 +11,8 @@ export type ReplyDeliveryStatus =
   | 'pending'
   | 'delivered_to_api'
   | 'failed'
-  | 'simulated';
+  | 'simulated'
+  | 'uncertain_timeout';
 
 export interface IReplyLog extends Document {
   eventId: mongoose.Types.ObjectId;
@@ -65,7 +66,7 @@ const ReplyLogSchema = new Schema<IReplyLog>(
     },
     deliveryStatus: {
       type: String,
-      enum: ['pending', 'delivered_to_api', 'failed', 'simulated'],
+      enum: ['pending', 'delivered_to_api', 'failed', 'simulated', 'uncertain_timeout'],
       default: 'pending',
       index: true,
     },

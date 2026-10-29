@@ -96,16 +96,29 @@ describe('ReelIdentifierAdapter', () => {
   // Section B: Host Validation & Adversarial Input Defense
   // =========================================================================
 
-  it('rejects URLs from unverified or attacker-controlled hostnames', () => {
-    // Attempted SSRF or spoofed hostnames
+  it('rejects URLs from unverified or attacker-controlled hostnames and invalid protocols', () => {
+    // Attempted SSRF, lookalike hostnames, or invalid protocols
     expect(ReelIdentifierAdapter.extractShortcode('https://evil-instagram.com/reel/DC5aXYZ89ab/')).toBeNull();
     expect(ReelIdentifierAdapter.extractShortcode('https://instagram.com.attacker.com/reel/DC5aXYZ89ab/')).toBeNull();
     expect(ReelIdentifierAdapter.extractShortcode('http://fakeig.com/reel/DC5aXYZ89ab/')).toBeNull();
+    expect(ReelIdentifierAdapter.extractShortcode('javascript:alert(1)')).toBeNull();
+    expect(ReelIdentifierAdapter.extractShortcode('ftp://instagram.com/reel/DC5aXYZ89ab/')).toBeNull();
 
     // Valid official domains
     expect(ReelIdentifierAdapter.extractShortcode('https://www.instagram.com/reel/DC5aXYZ89ab/')).toBe('DC5aXYZ89ab');
     expect(ReelIdentifierAdapter.extractShortcode('https://instagram.com/reel/DC5aXYZ89ab/')).toBe('DC5aXYZ89ab');
     expect(ReelIdentifierAdapter.extractShortcode('https://instagr.am/reel/DC5aXYZ89ab/')).toBe('DC5aXYZ89ab');
+  });
+
+  it('strictly throws error when attempting to convert numeric media ID into canonical URL', () => {
+    // Numeric media IDs must NEVER fabricate a 404 /reel/{numericId}/ URL
+    expect(() => ReelIdentifierAdapter.toCanonicalUrl('17922314289204730')).toThrowError(
+      /not a valid alphanumeric shortcode/
+    );
+    expect(() => ReelIdentifierAdapter.toCanonicalUrl('18109567273171822')).toThrowError(
+      /not a valid alphanumeric shortcode/
+    );
+    expect(ReelIdentifierAdapter.toCanonicalUrl('DC5aXYZ89ab')).toBe('https://www.instagram.com/reel/DC5aXYZ89ab/');
   });
 
   // =========================================================================
@@ -217,5 +230,58 @@ describe('ReelIdentifierAdapter', () => {
     expect(cleanUrl).not.toContain('utm_source');
     expect(cleanUrl).not.toContain('fbclid');
     expect(cleanUrl).toContain('https://www.instagram.com/reel/DC5aXYZ89ab/');
+  });
+
+  it('[Synthetic Payload] extracts reel_video_id from payload property', () => {
+    const event: InstagramMessagingEvent = {
+      sender: { id: 'user_12345' },
+      recipient: { id: 'page_67890' },
+      timestamp: 1736259748810,
+      message: {
+        mid: 'mid_sample_reel_video_id_001',
+        attachments: [
+          {
+            type: 'ig_reel',
+            payload: {
+              reel_video_id: '17922314289204730',
+              title: 'Cool Reel Tutorial',
+              url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=17922314289204730',
+            },
+          },
+        ],
+      },
+    };
+
+    const result = ReelIdentifierAdapter.identify(event);
+    expect(result.status).toBe('identified');
+    expect(result.numericMediaId).toBe('17922314289204730');
+    expect(result.reelShortcode).toBeUndefined();
+    expect(result.canonicalReelUrl).toBeUndefined();
+    expect(result.source).toBe('numeric_media_id');
+  });
+
+  it('[Synthetic Payload] extracts reel_video_id from CDN query parameters', () => {
+    const event: InstagramMessagingEvent = {
+      sender: { id: 'user_12345' },
+      recipient: { id: 'page_67890' },
+      timestamp: 1736259748810,
+      message: {
+        mid: 'mid_sample_cdn_query_002',
+        attachments: [
+          {
+            type: 'ig_reel',
+            payload: {
+              url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?reel_video_id=17922314289204730',
+              title: 'CDN Query Reel',
+            },
+          },
+        ],
+      },
+    };
+
+    const result = ReelIdentifierAdapter.identify(event);
+    expect(result.status).toBe('identified');
+    expect(result.numericMediaId).toBe('17922314289204730');
+    expect(result.canonicalReelUrl).toBeUndefined();
   });
 });

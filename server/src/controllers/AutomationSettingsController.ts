@@ -124,7 +124,9 @@ export class AutomationSettingsController {
         matchResult = await ResourceMatcherService.match(
           identification.reelId,
           identification.canonicalReelUrl,
-          identification.videoId
+          identification.videoId,
+          identification.reelShortcode,
+          identification.numericMediaId
         );
 
         if (matchResult.status === 'matched' && matchResult.resource) {

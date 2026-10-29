@@ -12,11 +12,12 @@ export interface SendMessageOptions {
 
 export interface SendMessageResult {
   success: boolean;
-  deliveryStatus: 'delivered_to_api' | 'simulated' | 'failed';
+  deliveryStatus: 'delivered_to_api' | 'simulated' | 'failed' | 'uncertain_timeout';
   providerMessageId?: string;
   error?: string;
   errorCode?: string;
   isTransient?: boolean;
+  isAmbiguous?: boolean;
   attemptsMade: number;
 }
 
@@ -99,13 +100,20 @@ export class MetaSendService {
     // 4. Live Meta Send API Call with Bounded Retries
     const apiVersion = process.env.META_GRAPH_API_VERSION || 'v21.0';
     const endpoint = `https://graph.facebook.com/${apiVersion}/me/messages`;
+    const timeoutMs = Number(process.env.META_API_TIMEOUT_MS) || 10000;
 
     let attempt = 0;
     let lastError = '';
     let isTransientError = false;
+    let isAmbiguousError = false;
+    let finalDeliveryStatus: 'delivered_to_api' | 'simulated' | 'failed' | 'uncertain_timeout' = 'failed';
+    let finalErrorCode = 'SEND_FAILED';
 
     while (attempt < maxRetries) {
       attempt++;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
       try {
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -117,7 +125,10 @@ export class MetaSendService {
             recipient: { id: recipientId },
             message: { text: messageText },
           }),
+          signal: controller.signal,
         });
+
+        clearTimeout(timer);
 
         const data: any = await response.json();
 
@@ -157,6 +168,7 @@ export class MetaSendService {
 
         if (!isTransientError) {
           // Fail fast on permanent error (e.g. invalid recipient, permissions missing)
+          finalErrorCode = metaError.code ? `META_ERROR_${metaError.code}` : 'META_API_ERROR';
           break;
         }
 
@@ -166,8 +178,22 @@ export class MetaSendService {
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       } catch (err: any) {
+        clearTimeout(timer);
+
+        if (err.name === 'AbortError' || err.message?.includes('aborted') || err.message?.includes('timeout')) {
+          // Network timeout after dispatch: delivery status is ambiguous.
+          // Because Meta Send API does not support client idempotency tokens, blind retry could duplicate DMs.
+          lastError = `Meta Send API request timed out after ${timeoutMs}ms. Ambiguous delivery state; aborting automatic retry to prevent duplicate messages.`;
+          isTransientError = false;
+          isAmbiguousError = true;
+          finalDeliveryStatus = 'uncertain_timeout';
+          finalErrorCode = 'AMBIGUOUS_SEND_TIMEOUT';
+          break;
+        }
+
         lastError = `Network / Transport Error: ${err.message}`;
         isTransientError = true;
+        finalErrorCode = 'TRANSPORT_ERROR';
 
         if (attempt < maxRetries) {
           const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 5000);
@@ -177,13 +203,15 @@ export class MetaSendService {
     }
 
     // If retries exhausted or permanent failure
-    await this.updateFailureRecords(replyLogId, eventId, lastError, attempt);
+    await this.updateFailureRecords(replyLogId, eventId, lastError, attempt, finalDeliveryStatus, finalErrorCode);
 
     return {
       success: false,
-      deliveryStatus: 'failed',
+      deliveryStatus: finalDeliveryStatus,
       error: lastError,
+      errorCode: finalErrorCode,
       isTransient: isTransientError,
+      isAmbiguous: isAmbiguousError,
       attemptsMade: attempt,
     };
   }
@@ -270,17 +298,65 @@ export class MetaSendService {
     }
   }
 
+  /**
+   * Resolves an authoritative numeric media ID from a Reel shortcode via Meta Graph API.
+   * Uses GET https://graph.facebook.com/${apiVersion}/${igUserId}/media?fields=id,shortcode,permalink
+   * Returns null if credentials are not configured or no match is found.
+   */
+  public static async resolveAuthoritativeNumericId(
+    shortcode: string
+  ): Promise<{ numericMediaId?: string; permalink?: string } | null> {
+    const accessToken = process.env.META_PAGE_ACCESS_TOKEN;
+    const igUserId = process.env.META_INSTAGRAM_ACCOUNT_ID;
+    if (!accessToken || !igUserId || !shortcode) {
+      return null;
+    }
+
+    const apiVersion = process.env.META_GRAPH_API_VERSION || 'v21.0';
+    const endpoint = `https://graph.facebook.com/${apiVersion}/${igUserId}/media?fields=id,shortcode,permalink&limit=50`;
+
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      if (!response.ok) return null;
+      const data: any = await response.json();
+      if (!data?.data || !Array.isArray(data.data)) return null;
+
+      const found = data.data.find(
+        (m: any) =>
+          m.shortcode === shortcode ||
+          m.permalink?.includes(`/reel/${shortcode}/`) ||
+          m.permalink?.includes(`/p/${shortcode}/`)
+      );
+
+      if (found?.id) {
+        return {
+          numericMediaId: String(found.id),
+          permalink: found.permalink,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private static async updateFailureRecords(
     replyLogId: string,
     eventId: string,
     error: string,
-    attempts: number
+    attempts: number,
+    deliveryStatus: 'failed' | 'uncertain_timeout' = 'failed',
+    errorCode: string = 'SEND_FAILED'
   ): Promise<void> {
     await ReplyLog.updateOne(
       { _id: replyLogId },
       {
         $set: {
-          deliveryStatus: 'failed',
+          deliveryStatus,
           lastError: error,
           attemptCount: attempts,
         },
@@ -291,7 +367,7 @@ export class MetaSendService {
       {
         $set: {
           processingStatus: 'reply_failed',
-          errorCode: 'SEND_FAILED',
+          errorCode,
           errorDetails: error,
         },
       }

@@ -68,15 +68,22 @@ export class AuthController {
         maxAge: 24 * 60 * 60 * 1000,
       });
 
-      res.status(200).json({
-        token, // Provided for headless / non-browser API callers
+      const responsePayload: Record<string, any> = {
         csrfToken,
         admin: {
           id: admin._id,
           username: admin.username,
           role: admin.role,
         },
-      });
+      };
+
+      // Only expose raw bearer token if client explicitly requests it (e.g. CLI tools or test suites).
+      // Browser dashboard remains exclusively cookie-authenticated to prevent token theft via XSS.
+      if (req.body?.includeBearerToken === true) {
+        responsePayload.token = token;
+      }
+
+      res.status(200).json(responsePayload);
     } catch (err: any) {
       res.status(500).json({ error: 'Login failed', details: err.message });
     }

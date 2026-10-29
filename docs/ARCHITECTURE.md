@@ -100,7 +100,25 @@ The core domain module responsible for parsing and normalizing incoming message 
 ### 4.4 Outbound Messenger & Rate-Limiter
 - Interacts with Meta Graph API (`/v21.0/me/messages`).
 - Enforces the 24-hour messaging window rule.
+- Enforces bounded request timeouts (default 10s) with `AbortController`.
+- Ambiguous delivery states (such as send timeouts) are recorded as `uncertain_timeout` and are NOT blindly retried to avoid duplicate DMs.
 - Applies exponential backoff with jitter for transient errors (HTTP 5xx, rate limits), and fails fast on permanent client errors (HTTP 400/403, permissions revoked).
+
+### 4.5 Scope Boundary & Future Comment Automation Decoupling
+
+#### Current Engine Scope: Inbound Direct Message (DM) Reel Shares Only
+The runtime engine is strictly focused on user-initiated Instagram Direct Messages where an Instagram user sends a shared Reel (native `ig_reel` attachment or direct Instagram URL) to the creator's connected professional account:
+- **Webhook Subscription:** Subscribes to the `messages` field on the `instagram` webhook object.
+- **Required Meta Permissions:** `instagram_manage_messages` and `pages_manage_metadata`.
+- **Matching Model:** Exact deterministic shortcode, numeric media ID, or canonical URL lookup against our own MongoDB resource database.
+- **Delivery Model:** Dispatches outbound direct messages via Meta's Instagram Send API (`/v21.0/me/messages`) within the standard 24-hour messaging window.
+- **No Scraping or AI Hallucinations:** Zero scraping of Instagram feeds, zero fuzzy AI matching, zero unsolicited broadcast outreach.
+
+#### Comment-to-DM as an Independent Future Capability
+Public comment tracking and keyword-triggered comment replies (e.g. "Comment 'LINK' to get the preset") are **not** part of this codebase and are documented here as an independent capability for future extension:
+1. **Different Webhook Event Structure:** Comment webhooks arrive under `feed` / `comments` payloads with comment IDs and parent media IDs, rather than messaging `mid` events with attachments.
+2. **Different Meta Permissions & Graph API Policies:** Comment monitoring requires `instagram_manage_comments` and adheres to Meta's strict automated commenting policies and aggressive velocity limits.
+3. **Decoupled Architecture:** If comment automation is added in the future, it should run as an isolated worker service with independent event ingestion queues so that comment volume spikes never block or impact private 1-on-1 resource DM delivery.
 
 ---
 

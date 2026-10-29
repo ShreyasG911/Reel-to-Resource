@@ -1,4 +1,9 @@
 import mongoose from 'mongoose';
+import { AdminUser } from '../models/AdminUser';
+import { AutomationEvent } from '../models/AutomationEvent';
+import { IntegrationSetting } from '../models/IntegrationSetting';
+import { ReplyLog } from '../models/ReplyLog';
+import { Resource } from '../models/Resource';
 
 export async function connectDatabase(uri?: string): Promise<typeof mongoose> {
   const mongoUri = uri || process.env.MONGODB_URI || 'mongodb://localhost:27017/reel_to_resource';
@@ -15,5 +20,16 @@ export async function connectDatabase(uri?: string): Promise<typeof mongoose> {
 
 export async function disconnectDatabase(): Promise<void> {
   await mongoose.disconnect();
+}
+
+export async function ensureDatabaseIndexes(): Promise<void> {
+  await Promise.all([
+    AdminUser.init(),
+    AutomationEvent.init(),
+    IntegrationSetting.init(),
+    ReplyLog.init(),
+    Resource.init(),
+  ]);
+  console.log('[Database] All schema indexes ensured.');
 }
 

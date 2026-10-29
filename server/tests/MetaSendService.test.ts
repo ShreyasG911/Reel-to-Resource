@@ -230,5 +230,96 @@ describe('MetaSendService', () => {
 
     vi.unstubAllGlobals();
   });
+
+  it('marks send as uncertain_timeout on request timeout and does NOT blind retry', async () => {
+    process.env.META_PAGE_ACCESS_TOKEN = 'mock_valid_token';
+    process.env.META_API_TIMEOUT_MS = '100'; // Short timeout for testing
+
+    const event = await AutomationEvent.create({
+      providerMessageId: 'mid_timeout_test',
+      senderId: 'ig_user_timeout',
+      recipientId: 'page_123',
+      eventTimestamp: Date.now(),
+      messageType: 'attachment_url',
+      identificationStatus: 'identified',
+      processingStatus: 'processing',
+    });
+
+    const replyLog = await ReplyLog.create({
+      eventId: event._id,
+      recipientId: 'ig_user_timeout',
+      replyType: 'resource_found',
+      renderedMessage: 'Timeout test message',
+      deliveryStatus: 'pending',
+    });
+
+    // Mock fetch to simulate an AbortError (timeout)
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+
+    const fetchMock = vi.fn().mockRejectedValue(abortError);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await MetaSendService.sendDirectMessage({
+      replyLogId: (replyLog._id as any).toString(),
+      recipientId: 'ig_user_timeout',
+      messageText: 'Timeout test message',
+      eventTimestamp: Date.now(),
+      eventId: (event._id as any).toString(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.deliveryStatus).toBe('uncertain_timeout');
+    expect(result.isAmbiguous).toBe(true);
+    expect(result.errorCode).toBe('AMBIGUOUS_SEND_TIMEOUT');
+    expect(result.attemptsMade).toBe(1); // Must NOT blind retry
+
+    // Check DB
+    const updatedReply = await ReplyLog.findById(replyLog._id);
+    expect(updatedReply?.deliveryStatus).toBe('uncertain_timeout');
+
+    const updatedEvent = await AutomationEvent.findById(event._id);
+    expect(updatedEvent?.processingStatus).toBe('reply_failed');
+    expect(updatedEvent?.errorCode).toBe('AMBIGUOUS_SEND_TIMEOUT');
+
+    delete process.env.META_API_TIMEOUT_MS;
+    vi.unstubAllGlobals();
+  });
+
+  it('resolves authoritative numeric ID from Reel shortcode using Graph API media endpoint', async () => {
+    process.env.META_PAGE_ACCESS_TOKEN = 'test_token';
+    process.env.META_INSTAGRAM_ACCOUNT_ID = '17841400012345';
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          {
+            id: '17922314289204730',
+            shortcode: 'DC5aXYZ89ab',
+            permalink: 'https://www.instagram.com/reel/DC5aXYZ89ab/',
+          },
+          {
+            id: '18109567273171899',
+            shortcode: 'OTHER_SHORTCODE',
+            permalink: 'https://www.instagram.com/reel/OTHER_SHORTCODE/',
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const resolved = await MetaSendService.resolveAuthoritativeNumericId('DC5aXYZ89ab');
+    expect(resolved).not.toBeNull();
+    expect(resolved?.numericMediaId).toBe('17922314289204730');
+    expect(resolved?.permalink).toBe('https://www.instagram.com/reel/DC5aXYZ89ab/');
+
+    // Calling with non-existent shortcode
+    const notFound = await MetaSendService.resolveAuthoritativeNumericId('DOES_NOT_EXIST');
+    expect(notFound).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
 });
 

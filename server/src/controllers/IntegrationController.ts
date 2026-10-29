@@ -27,11 +27,17 @@ export class IntegrationController {
       const requiredKeys = ['META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN', 'META_PAGE_ACCESS_TOKEN'];
       const configuredCount = requiredKeys.filter((k) => (envChecks as any)[k]).length;
 
-      let readinessStatus: 'ready' | 'partial' | 'unconfigured' = 'unconfigured';
+      let readinessStatus: 'ready' | 'configured_unverified' | 'unconfigured' = 'unconfigured';
+      const isConnectedAndVerified =
+        settings?.connectedAccount?.status === 'configured' &&
+        Boolean(settings?.connectedAccount?.instagramBusinessAccountId);
+
       if (configuredCount === requiredKeys.length) {
-        readinessStatus = 'ready';
+        readinessStatus = isConnectedAndVerified ? 'ready' : 'configured_unverified';
       } else if (configuredCount > 0) {
-        readinessStatus = 'partial';
+        readinessStatus = 'configured_unverified';
+      } else {
+        readinessStatus = 'unconfigured';
       }
 
       const [liveDeliveries, simulatedDeliveries, failedDeliveries] = await Promise.all([

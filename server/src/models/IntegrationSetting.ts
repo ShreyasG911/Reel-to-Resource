@@ -16,8 +16,9 @@ export interface IIntegrationSetting extends Document {
   connectedAccount: {
     accountId?: string;
     username?: string;
+    instagramBusinessAccountId?: string;
     connectedAt?: Date;
-    status: 'configured' | 'unconfigured' | 'error';
+    status: 'configured' | 'unconfigured' | 'error' | 'partial';
     lastError?: string;
   };
   createdAt: Date;
@@ -67,10 +68,11 @@ const IntegrationSettingSchema = new Schema<IIntegrationSetting>(
     connectedAccount: {
       accountId: String,
       username: String,
+      instagramBusinessAccountId: String,
       connectedAt: Date,
       status: {
         type: String,
-        enum: ['configured', 'unconfigured', 'error'],
+        enum: ['configured', 'unconfigured', 'error', 'partial'],
         default: 'unconfigured',
       },
       lastError: String,

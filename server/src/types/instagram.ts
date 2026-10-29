@@ -41,6 +41,7 @@ export interface InstagramAttachmentPayload {
   video_id?: string;
   asset_id?: string;
   reel_id?: string;
+  reel_video_id?: string;
   [key: string]: unknown;
 }
 
@@ -55,6 +56,7 @@ export interface InstagramMessagePayload {
   attachments?: InstagramAttachment[];
   is_unsupported?: boolean;
   is_deleted?: boolean;
+  is_echo?: boolean;
   reply_to?: {
     mid: string;
   };

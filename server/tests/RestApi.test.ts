@@ -58,6 +58,7 @@ describe('Dashboard REST API Endpoints & Security', () => {
       body: JSON.stringify({
         username: 'admin',
         password: 'CorrectAdminPassword123!',
+        includeBearerToken: true,
       }),
     });
     const loginBody: any = await loginRes.json();
@@ -110,6 +111,7 @@ describe('Dashboard REST API Endpoints & Security', () => {
       body: JSON.stringify({
         username: 'admin',
         password: 'CorrectAdminPassword123!',
+        includeBearerToken: true,
       }),
     });
     expect(loginRes.status).toBe(200);

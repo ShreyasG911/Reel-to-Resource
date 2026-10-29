@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { createApp } from './app';
-import { connectDatabase } from './config/database';
+import { connectDatabase, ensureDatabaseIndexes } from './config/database';
 import { validateProductionSecurity } from './utils/security';
 
 const PORT = process.env.PORT || 5000;
@@ -12,8 +12,9 @@ async function bootstrap() {
     // 1. Fail-fast validation of security configuration
     validateProductionSecurity();
 
-    // 2. Connect to database
+    // 2. Connect to database and verify schema indexes
     await connectDatabase();
+    await ensureDatabaseIndexes();
     const app = createApp();
 
     app.listen(PORT, () => {
