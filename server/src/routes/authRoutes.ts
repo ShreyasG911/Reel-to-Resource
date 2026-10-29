@@ -5,10 +5,10 @@ import { requireAdminAuth } from '../middleware/auth';
 
 const router = Router();
 
-// Strict rate-limiter on login route: 15 attempts per 15 minutes per IP
+// Strict rate-limiter on login route: 15 attempts per 15 minutes per IP (relaxed in test env)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: process.env.NODE_ENV === 'test' ? 1000 : 15,
   message: { error: 'Too many login attempts. Please wait 15 minutes before trying again.' },
   standardHeaders: true,
   legacyHeaders: false,

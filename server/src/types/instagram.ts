@@ -19,7 +19,8 @@ export type IdentificationSource =
 
 export interface ReelIdentificationResult {
   status: ReelIdentificationStatus;
-  reelId?: string;               // Alphanumeric shortcode (e.g. "DC5aXYZ89ab")
+  reelShortcode?: string;        // Alphanumeric shortcode (e.g. "DC5aXYZ89ab")
+  reelId?: string;               // Normalized identifier (equal to reelShortcode or numericMediaId)
   canonicalReelUrl?: string;     // Canonical URL built ONLY from verified shortcode: https://www.instagram.com/reel/{shortcode}/
   numericMediaId?: string;       // Numeric Meta video/media identifier (e.g. "18109567273171822") - NEVER fabricated into a canonical URL
   source: IdentificationSource;

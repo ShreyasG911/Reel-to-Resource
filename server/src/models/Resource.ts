@@ -7,6 +7,8 @@ export interface IResource extends Document {
   title: string;
   description?: string;
   reelId: string;
+  reelShortcode?: string;
+  numericMediaId?: string;
   canonicalReelUrl: string;
   resourceUrl: string;
   resourceType: ResourceType;
@@ -38,6 +40,16 @@ const ResourceSchema = new Schema<IResource>(
       required: [true, 'Reel identifier/shortcode is required'],
       trim: true,
       unique: true,
+      index: true,
+    },
+    reelShortcode: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    numericMediaId: {
+      type: String,
+      trim: true,
       index: true,
     },
     canonicalReelUrl: {

@@ -10,6 +10,13 @@ import { AdminUser } from '../src/models/AdminUser.js';
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/reel_to_resource';
 
 async function seed() {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('\n[FATAL ERROR] Seeding demo resources is strictly disabled in production (NODE_ENV=production).');
+    console.error('[FATAL ERROR] Real production resources must be managed via the authenticated dashboard.');
+    console.error('[FATAL ERROR] To provision an administrator account safely, execute: npm run admin:create <username> <password>\n');
+    process.exit(1);
+  }
+
   console.log(`[Seed] Connecting to MongoDB at ${MONGODB_URI}...`);
   await mongoose.connect(MONGODB_URI);
 
@@ -23,6 +30,7 @@ async function seed() {
       title: 'Full-Stack SaaS Starter Kit 2026',
       description: 'Production-ready Node.js, React, and MongoDB template featuring auth, billing, and team workspaces.',
       reelId: 'DC5aXYZ89ab',
+      reelShortcode: 'DC5aXYZ89ab',
       canonicalReelUrl: 'https://www.instagram.com/reel/DC5aXYZ89ab/',
       resourceUrl: 'https://github.com/example/saas-starter-kit',
       resourceType: 'code',
@@ -30,11 +38,13 @@ async function seed() {
       isAvailable: true,
       status: 'active',
       aliases: ['18109567273171822'],
+      numericMediaId: '18109567273171822',
     },
     {
       title: 'Minimalist Notion Life OS & Task Tracker',
       description: 'Streamlined personal productivity dashboard with PARA organization and weekly reviews.',
       reelId: 'C890_MySampleReel',
+      reelShortcode: 'C890_MySampleReel',
       canonicalReelUrl: 'https://www.instagram.com/reel/C890_MySampleReel/',
       resourceUrl: 'https://notion.so/templates/minimalist-life-os',
       resourceType: 'template',
@@ -47,6 +57,7 @@ async function seed() {
       title: 'Cinematic Mood Lightroom Presets & LUTs',
       description: '10 custom color grading profiles for moody outdoor and portrait photography.',
       reelId: 'LUT_PACK_2026',
+      reelShortcode: 'LUT_PACK_2026',
       canonicalReelUrl: 'https://www.instagram.com/reel/LUT_PACK_2026/',
       resourceUrl: 'https://gumroad.com/l/cinematic-luts-2026',
       resourceType: 'preset',
@@ -58,6 +69,7 @@ async function seed() {
       title: 'Product Design Career Roadmap (PDF)',
       description: 'Comprehensive step-by-step curriculum for advancing to Senior Product Designer.',
       reelId: 'DESIGN_ROADMAP',
+      reelShortcode: 'DESIGN_ROADMAP',
       canonicalReelUrl: 'https://www.instagram.com/reel/DESIGN_ROADMAP/',
       resourceUrl: 'https://example.com/downloads/design-roadmap-2026.pdf',
       resourceType: 'guide',
@@ -69,6 +81,7 @@ async function seed() {
       title: 'AI Prompt Engineering Playbook (Draft)',
       description: 'Advanced reasoning frameworks and few-shot examples for LLMs.',
       reelId: 'AI_PLAYBOOK',
+      reelShortcode: 'AI_PLAYBOOK',
       canonicalReelUrl: 'https://www.instagram.com/reel/AI_PLAYBOOK/',
       resourceUrl: 'https://example.com/draft/ai-playbook',
       resourceType: 'guide',
@@ -97,16 +110,23 @@ async function seed() {
     },
   });
 
-  console.log('[Seed] Provisioning initial Administrator account...');
-  await AdminUser.deleteMany({});
-  const defaultAdminUser = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase();
-  const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPassword123!';
-  const passwordHash = await bcrypt.hash(defaultAdminPassword, 12);
-  await AdminUser.create({
-    username: defaultAdminUser,
-    passwordHash,
-    role: 'admin',
-  });
+  // Safe Admin Handling: Never delete existing admins; only provision if empty in dev mode
+  console.log('[Seed] Inspecting administrator accounts...');
+  const existingAdmins = await AdminUser.countDocuments();
+  if (existingAdmins === 0) {
+    const defaultAdminUser = (process.env.ADMIN_USERNAME || 'devadmin').trim().toLowerCase();
+    const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'DevPass123!SecureLocalOnly';
+    const passwordHash = await bcrypt.hash(defaultAdminPassword, 12);
+    await AdminUser.create({
+      username: defaultAdminUser,
+      passwordHash,
+      role: 'admin',
+    });
+    console.log(`[Seed] Provisioned initial local development admin: "${defaultAdminUser}"`);
+    console.log('[Seed] WARNING: Use `npm run admin:create <user> <pass>` for production administrators.');
+  } else {
+    console.log(`[Seed] Preserved ${existingAdmins} existing administrator account(s).`);
+  }
 
   console.log('\n' + '='.repeat(80));
   console.log('  DATABASE SEED COMPLETED SUCCESSFULLY  ');

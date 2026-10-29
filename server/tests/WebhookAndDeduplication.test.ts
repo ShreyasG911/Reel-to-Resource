@@ -189,5 +189,81 @@ describe('Webhook Handshake, Signature Verification & Idempotency', () => {
     const replyCount = await ReplyLog.countDocuments({ eventId: storedEvent?._id });
     expect(replyCount).toBe(0);
   });
+
+  it('guarantees unique constraint on ReplyLog.eventId prevents duplicate logical reply records', async () => {
+    const event = await AutomationEvent.create({
+      providerMessageId: 'mid_unique_reply_guard',
+      senderId: 'user_gamma',
+      recipientId: 'our_page_omega',
+      eventTimestamp: Date.now(),
+      messageType: 'shortcode_attachment',
+      identificationStatus: 'identified',
+      processingStatus: 'processing',
+    });
+
+    // First reply record succeeds
+    await ReplyLog.create({
+      eventId: event._id,
+      recipientId: 'user_gamma',
+      replyType: 'resource_found',
+      renderedMessage: 'First reply instance',
+      deliveryStatus: 'delivered_to_api',
+    });
+
+    // Attempting a second insert for the exact same eventId MUST violate the unique constraint
+    let caughtError: any = null;
+    try {
+      await ReplyLog.create({
+        eventId: event._id,
+        recipientId: 'user_gamma',
+        replyType: 'resource_found',
+        renderedMessage: 'Duplicate reply attempt',
+        deliveryStatus: 'delivered_to_api',
+      });
+    } catch (err: any) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeDefined();
+    expect(caughtError.code === 11000 || caughtError.message.includes('E11000')).toBe(true);
+
+    const totalReplies = await ReplyLog.countDocuments({ eventId: event._id });
+    expect(totalReplies).toBe(1);
+  });
+
+  it('recovers stuck events after worker crash (> 5 min lock)', async () => {
+    const { EventWorkerService } = await import('../src/services/EventWorkerService');
+
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000);
+    const crashedEvent = await AutomationEvent.create({
+      providerMessageId: 'mid_crashed_worker_001',
+      senderId: 'user_delta',
+      recipientId: 'our_page_omega',
+      eventTimestamp: Date.now(),
+      messageType: 'shortcode_attachment',
+      extractedReelId: 'ICON_REEL_123',
+      identificationStatus: 'identified',
+      processingStatus: 'processing', // Stuck in processing
+      lockedAt: sixMinutesAgo,
+      retryCount: 0,
+      rawEventPayload: {
+        sender: { id: 'user_delta' },
+        recipient: { id: 'our_page_omega' },
+        timestamp: Date.now(),
+        message: {
+          mid: 'mid_crashed_worker_001',
+          text: 'https://www.instagram.com/reel/ICON_REEL_123/',
+        },
+      },
+    });
+
+    // Run queue sweep
+    await EventWorkerService.processPendingQueue();
+
+    // Stuck event should be unlocked, recovered, and processed to reply_sent
+    const recovered = await AutomationEvent.findById(crashedEvent._id);
+    expect(recovered?.processingStatus).toBe('reply_sent');
+    expect(recovered?.retryCount).toBeGreaterThan(0);
+  });
 });
 

@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
 import { AdminUser } from '../models/AdminUser';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { getJwtSecret, generateCsrfToken } from '../utils/security';
 
 export class AuthController {
   /**
@@ -32,7 +32,7 @@ export class AuthController {
         return;
       }
 
-      const jwtSecret = process.env.DASHBOARD_JWT_SECRET || 'dev_fallback_secret_min_32_characters_long';
+      const jwtSecret = getJwtSecret();
       const token = jwt.sign(
         {
           id: admin._id,
@@ -47,16 +47,30 @@ export class AuthController {
       admin.lastLoginAt = new Date();
       await admin.save();
 
-      // Secure cookie
+      const isProduction = process.env.NODE_ENV === 'production';
+      const csrfToken = generateCsrfToken();
+
+      // 1. HttpOnly Session Cookie for authentication
       res.cookie('admin_token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: isProduction,
         sameSite: 'lax',
+        path: '/',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+
+      // 2. Readable Cookie for CSRF double-submit protection
+      res.cookie('csrf_token', csrfToken, {
+        httpOnly: false,
+        secure: isProduction,
+        sameSite: 'lax',
+        path: '/',
         maxAge: 24 * 60 * 60 * 1000,
       });
 
       res.status(200).json({
-        token,
+        token, // Provided for headless / non-browser API callers
+        csrfToken,
         admin: {
           id: admin._id,
           username: admin.username,
@@ -77,8 +91,23 @@ export class AuthController {
       return;
     }
 
+    // Ensure client has an active CSRF token cookie on session check
+    const isProduction = process.env.NODE_ENV === 'production';
+    let csrfToken = (req as any).cookies?.csrf_token;
+    if (!csrfToken) {
+      csrfToken = generateCsrfToken();
+      res.cookie('csrf_token', csrfToken, {
+        httpOnly: false,
+        secure: isProduction,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+    }
+
     res.status(200).json({
       admin: req.admin,
+      csrfToken,
     });
   }
 
@@ -86,7 +115,22 @@ export class AuthController {
    * POST /api/v1/auth/logout
    */
   public static async logout(_req: Request, res: Response): Promise<void> {
-    res.clearCookie('admin_token');
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    res.clearCookie('admin_token', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/',
+    });
+
+    res.clearCookie('csrf_token', {
+      httpOnly: false,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/',
+    });
+
     res.status(200).json({ message: 'Successfully logged out' });
   }
 

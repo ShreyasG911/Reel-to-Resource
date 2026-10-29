@@ -78,6 +78,7 @@ export class ReelIdentifierAdapter {
             return {
               status: 'identified',
               reelId: candidate,
+              reelShortcode: candidate,
               canonicalReelUrl: this.toCanonicalUrl(candidate),
               source: 'shortcode_attachment',
               rawUrl: payload.url,
@@ -98,6 +99,7 @@ export class ReelIdentifierAdapter {
             return {
               status: 'identified',
               reelId: extractedShortcode,
+              reelShortcode: extractedShortcode,
               canonicalReelUrl: this.toCanonicalUrl(extractedShortcode),
               source: 'shortcode_attachment',
               rawUrl: this.sanitizeUrl(payload.url),
@@ -193,6 +195,7 @@ export class ReelIdentifierAdapter {
         return {
           status: 'identified',
           reelId: shortcode,
+          reelShortcode: shortcode,
           canonicalReelUrl: this.toCanonicalUrl(shortcode),
           source: 'shortcode_text',
           rawUrl: match[0],
@@ -213,19 +216,67 @@ export class ReelIdentifierAdapter {
   }
 
   /**
-   * Extracts the Reel shortcode from an Instagram URL string.
+   * Validates whether a given hostname strictly belongs to official Instagram domains.
+   */
+  public static isValidInstagramHost(hostname?: string): boolean {
+    if (!hostname) return false;
+    const h = hostname.trim().toLowerCase();
+    return (
+      h === 'instagram.com' ||
+      h === 'www.instagram.com' ||
+      h === 'instagr.am' ||
+      h === 'www.instagr.am'
+    );
+  }
+
+  /**
+   * Validates whether a hostname belongs to Meta CDN Lookaside domains.
+   */
+  public static isValidCdnHost(hostname?: string): boolean {
+    if (!hostname) return false;
+    const h = hostname.trim().toLowerCase();
+    return h === 'lookaside.fbsbx.com' || h.endsWith('.fbsbx.com');
+  }
+
+  /**
+   * Extracts the Reel shortcode from an Instagram URL string with strict host validation.
    */
   public static extractShortcode(url: string): string | null {
     if (!url || typeof url !== 'string') return null;
+
+    // Validate hostname if URL has protocol
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      try {
+        const parsed = new URL(url);
+        if (!this.isValidInstagramHost(parsed.hostname)) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+    }
+
     const match = url.match(this.REEL_URL_REGEX);
     return match && match[1] && this.isValidShortcode(match[1]) ? match[1].trim() : null;
   }
 
   /**
-   * Extracts asset_id from Meta CDN lookaside URLs.
+   * Extracts asset_id from Meta CDN lookaside URLs with hostname verification.
    */
   private static extractCdnAssetId(url: string): string | null {
     if (!url || typeof url !== 'string') return null;
+
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      try {
+        const parsed = new URL(url);
+        if (!this.isValidCdnHost(parsed.hostname)) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+    }
+
     const match = url.match(this.CDN_ASSET_ID_REGEX);
     return match && match[1] ? match[1].trim() : null;
   }

@@ -10,38 +10,40 @@ import {
 
 const API_BASE = '/api/v1';
 
-export function getAuthToken(): string | null {
-  return localStorage.getItem('admin_token');
-}
-
-export function setAuthToken(token: string): void {
-  localStorage.setItem('admin_token', token);
-}
-
-export function removeAuthToken(): void {
-  localStorage.removeItem('admin_token');
+/**
+ * Reads CSRF token cookie set by server.
+ */
+export function getCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const token = getAuthToken();
+  const method = (options?.method || 'GET').toUpperCase();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string>),
   };
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  // Attach CSRF protection header on state-changing requests
+  const mutatingMethods = ['POST', 'PATCH', 'PUT', 'DELETE'];
+  if (mutatingMethods.includes(method)) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
   }
 
   const res = await fetch(url, {
     ...options,
+    credentials: 'include', // Automatically passes HttpOnly admin_token & csrf_token cookies
     headers,
   });
 
   const data = await res.json();
   if (!res.ok) {
-    if (res.status === 401 && !url.includes('/auth/login')) {
-      removeAuthToken();
+    if (res.status === 401 && !url.includes('/auth/login') && !url.includes('/auth/me')) {
       window.dispatchEvent(new Event('auth:unauthorized'));
     }
     throw new Error(data.error || data.details || `Request failed with status ${res.status}`);

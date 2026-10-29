@@ -23,30 +23,37 @@ Meta signs all webhook notifications delivered via HTTP POST with an `X-Hub-Sign
 
 ---
 
-## 2. Administrator Authentication & Authorization (RBAC)
+## 2. Administrator Authentication, CSRF & Fail-Fast Startup
 
 The administrative dashboard and all `/api/v1/*` data routes (except public webhook ingest and login/health) are strictly protected by role-based authentication:
-- **Authentication Scheme:** JWT bearer tokens via `Authorization: Bearer <token>` and `HttpOnly`, `SameSite=Strict` session cookies.
+- **Fail-Fast Startup Validation:** In production (`NODE_ENV=production`), the application terminates immediately at boot if `DASHBOARD_JWT_SECRET` is missing or shorter than 32 characters (`validateProductionSecurity()`). Hardcoded fallback secrets are forbidden in production code paths.
+- **Pure Cookie Authentication:** Authentication uses `HttpOnly`, `SameSite=Lax`, `Secure` (in production) session cookies (`admin_token`). Tokens are never stored in client `localStorage`, eliminating token exfiltration via XSS.
+- **CSRF Protection (Double-Submit Cookie):** For cookie-authenticated mutating requests (`POST`, `PATCH`, `PUT`, `DELETE`), the server mandates an `X-CSRF-Token` header that matches the cryptographically generated `csrf_token` cookie via timing-safe comparison (`timingSafeCsrfCompare`).
+- **Session Termination on Logout:** `POST /api/v1/auth/logout` explicitly clears and expires both `admin_token` and `csrf_token` cookies.
 - **Password Storage:** Administrator passwords are salted and hashed using `bcryptjs` with work factor 10. Password hashes are excluded from default MongoDB model queries (`select: false`).
-- **Brute-Force Rate Limiting:** `POST /api/v1/auth/login` is guarded by a dedicated rate-limiter allowing a maximum of 5 failed attempts per 15-minute window per IP.
-- **Admin Provisioning:** Secure CLI script `npm run admin:create <username> <password>` enables initial credential generation without hardcoding secrets in source control.
+- **Brute-Force Rate Limiting:** `POST /api/v1/auth/login` is guarded by a dedicated rate-limiter allowing a maximum of 15 attempts per 15-minute window per IP.
+- **Admin Provisioning:** Secure CLI script `npm run admin:create <username> <password>` is the only sanctioned administrator creation mechanism. Seeding scripts refuse to run in production and never overwrite existing administrator records.
 
 ---
 
 ## 3. Token & Secret Protection
 
 - **Zero Exposure to Frontend:** Neither `META_APP_SECRET`, `META_PAGE_ACCESS_TOKEN`, `META_WEBHOOK_VERIFY_TOKEN`, `DASHBOARD_JWT_SECRET`, nor database connection strings are ever sent to client browsers or exposed in API responses.
+- **Header-Based API Transmission:** All outbound calls to Meta Graph API pass the Page Access Token securely via the `Authorization: Bearer <token>` header, strictly preventing exposure in URL query strings, browser history, or proxy access logs.
 - **Log Sanitization:** All request and response loggers filter out authorization headers, access tokens, and passwords before persisting to database or writing to stdout.
 - **Sanitized Sender Data:** User identifiers (`sender.id`) are masked or stored as opaque platform-scoped IDs. Full private conversation histories are not retained.
 
 ---
 
-## 4. Idempotency, Durable Queue & Race Condition Defense
+## 4. Idempotency, Durable Queue & At-Most-Once Delivery Enforcement
 
-Meta uses an *at-least-once* webhook delivery model. If network latency delays the 200 OK acknowledgment, Meta retries sending the same message.
-- **Atomic Locking:** Events are persisted immediately as `pending` with a unique index on `providerMessageId` (`mid`). Concurrent deliveries are deduplicated via MongoDB `E11000` unique index enforcement.
-- **Worker Locking:** Background workers acquire events via atomic `findOneAndUpdate` updating state to `processing` and setting `lockedAt`.
-- **Crash Recovery:** Events stuck in `processing` longer than 5 minutes due to unexpected node termination are automatically recovered and retried with exponential backoff up to `maxRetryAttempts`.
+Meta delivers webhook events using an **at-least-once** model. Network timeouts, latency, or server restarts can trigger redeliveries.
+- **At-Most-Once Reply Guarantee:** The system does not claim impossible end-to-end "exactly-once" external delivery across distributed network boundaries. Instead, it enforces rigorous **at-most-once reply attempt semantics**:
+  1. Incoming events are persisted atomically with a unique index on `providerMessageId` (`mid`). Redeliveries trigger MongoDB `E11000` duplicate handling and are discarded before queueing outbound messages.
+  2. The reply ledger maintains a unique index on `ReplyLog.eventId`, guaranteeing that at most one logical reply record can ever exist for an incoming event.
+- **Atomic Worker Leases:** Background workers acquire events via atomic `findOneAndUpdate({ processingStatus: 'pending' }, { $set: { processingStatus: 'processing', lockedAt: new Date() } })`.
+- **Transient Error Backoff:** Transient network failures or Meta 429/5xx errors place events back into `pending` status with exponential backoff schedules (`nextRetryAt`) and incremented retry counts, while permanent errors fail fast.
+- **Crash Recovery:** Events stuck in `processing` longer than 5 minutes due to worker crashes are automatically unlocked and retried up to `maxRetryAttempts`.
 
 ---
 

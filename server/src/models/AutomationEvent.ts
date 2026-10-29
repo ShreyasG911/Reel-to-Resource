@@ -21,11 +21,13 @@ export interface IAutomationEvent extends Document {
   eventTimestamp: number;
   messageType: string;
   extractedReelId?: string;
+  extractedReelShortcode?: string;
   extractedCanonicalUrl?: string;
   numericMediaId?: string;
   identificationStatus: ReelIdentificationStatus;
   processingStatus: EventProcessingStatus;
   lockedAt?: Date;
+  nextRetryAt?: Date;
   retryCount: number;
   matchResult?: {
     resourceId?: mongoose.Types.ObjectId;
@@ -72,6 +74,10 @@ const AutomationEventSchema = new Schema<IAutomationEvent>(
       type: String,
       index: true,
     },
+    extractedReelShortcode: {
+      type: String,
+      index: true,
+    },
     extractedCanonicalUrl: {
       type: String,
     },
@@ -104,6 +110,10 @@ const AutomationEventSchema = new Schema<IAutomationEvent>(
       index: true,
     },
     lockedAt: {
+      type: Date,
+      index: true,
+    },
+    nextRetryAt: {
       type: Date,
       index: true,
     },

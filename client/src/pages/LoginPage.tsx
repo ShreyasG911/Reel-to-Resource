@@ -33,7 +33,7 @@ export const LoginPage: React.FC = () => {
 
     try {
       const res = await api.login(username, password);
-      login(res.token, res.admin);
+      login(res.admin);
       navigate('/', { replace: true });
     } catch (err: any) {
       setError(err.message || 'Login failed');

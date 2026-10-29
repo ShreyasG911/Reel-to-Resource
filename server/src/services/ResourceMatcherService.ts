@@ -42,9 +42,14 @@ export class ResourceMatcherService {
     let candidateResource: IResource | null = null;
     let matchedBy: MatchSource | undefined;
 
-    // Priority 1: Exact normalized Reel ID
+    // Priority 1: Exact normalized Reel Shortcode or Reel ID
     if (searchedIdentifiers.reelId) {
-      candidateResource = await Resource.findOne({ reelId: searchedIdentifiers.reelId });
+      candidateResource = await Resource.findOne({
+        $or: [
+          { reelShortcode: searchedIdentifiers.reelId },
+          { reelId: searchedIdentifiers.reelId },
+        ],
+      });
       if (candidateResource) {
         matchedBy = 'reelId';
       }
@@ -58,9 +63,14 @@ export class ResourceMatcherService {
       }
     }
 
-    // Priority 3: Deterministic aliases (e.g. videoId or legacy asset IDs)
+    // Priority 3: Deterministic aliases or numeric media ID
     if (!candidateResource && searchedIdentifiers.videoId) {
-      candidateResource = await Resource.findOne({ aliases: searchedIdentifiers.videoId });
+      candidateResource = await Resource.findOne({
+        $or: [
+          { numericMediaId: searchedIdentifiers.videoId },
+          { aliases: searchedIdentifiers.videoId },
+        ],
+      });
       if (candidateResource) {
         matchedBy = 'alias';
       }

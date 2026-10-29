@@ -190,40 +190,81 @@ export class MetaSendService {
 
   /**
    * Validates configured Meta credentials against the Graph API /me endpoint.
+   * Sends token via Authorization header to prevent query parameter exposure in URLs and logs.
+   * Inspects linked Instagram Professional Account to confirm messaging capability.
    */
   public static async verifyCredentials(): Promise<{
     valid: boolean;
     accountId?: string;
     accountName?: string;
+    pageId?: string;
+    pageName?: string;
+    instagramBusinessAccountId?: string;
+    hasInstagramAccount: boolean;
+    messagingReady: boolean;
+    warnings: string[];
     error?: string;
   }> {
     const accessToken = process.env.META_PAGE_ACCESS_TOKEN;
     if (!accessToken) {
-      return { valid: false, error: 'META_PAGE_ACCESS_TOKEN is not configured in environment' };
+      return {
+        valid: false,
+        hasInstagramAccount: false,
+        messagingReady: false,
+        warnings: [],
+        error: 'META_PAGE_ACCESS_TOKEN is not configured in environment',
+      };
     }
 
     const apiVersion = process.env.META_GRAPH_API_VERSION || 'v21.0';
-    const endpoint = `https://graph.facebook.com/${apiVersion}/me?fields=id,name&access_token=${accessToken}`;
+    // Access token passed securely via Authorization header, NOT in URL query string
+    const endpoint = `https://graph.facebook.com/${apiVersion}/me?fields=id,name,instagram_business_account`;
 
     try {
-      const response = await fetch(endpoint);
+      const response = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
       const data: any = await response.json();
 
       if (response.ok && data?.id) {
+        const warnings: string[] = [];
+        const igBusinessId = data.instagram_business_account?.id;
+        const hasInstagramAccount = Boolean(igBusinessId);
+
+        if (!hasInstagramAccount) {
+          warnings.push(
+            'The authenticated Facebook Page is not linked to an Instagram Professional/Business account. Link an Instagram Professional account in Facebook Page Settings > Linked Accounts.'
+          );
+        }
+
         return {
           valid: true,
           accountId: data.id,
           accountName: data.name,
+          pageId: data.id,
+          pageName: data.name,
+          instagramBusinessAccountId: igBusinessId,
+          hasInstagramAccount,
+          messagingReady: hasInstagramAccount,
+          warnings,
         };
       }
 
       return {
         valid: false,
+        hasInstagramAccount: false,
+        messagingReady: false,
+        warnings: [],
         error: data?.error?.message || `HTTP ${response.status} verification failure`,
       };
     } catch (err: any) {
       return {
         valid: false,
+        hasInstagramAccount: false,
+        messagingReady: false,
+        warnings: [],
         error: `Network error verifying credentials: ${err.message}`,
       };
     }

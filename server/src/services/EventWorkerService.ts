@@ -40,6 +40,7 @@ export class EventWorkerService {
         eventTimestamp: event.timestamp || Date.now(),
         messageType: idResult.source,
         extractedReelId: idResult.reelId,
+        extractedReelShortcode: idResult.reelShortcode,
         extractedCanonicalUrl: idResult.canonicalReelUrl,
         numericMediaId: idResult.numericMediaId,
         identificationStatus: idResult.status,
@@ -94,12 +95,15 @@ export class EventWorkerService {
 
       event.identificationStatus = idResult.status;
       event.extractedReelId = idResult.reelId;
+      event.extractedReelShortcode = idResult.reelShortcode;
       event.extractedCanonicalUrl = idResult.canonicalReelUrl;
       event.numericMediaId = idResult.numericMediaId;
+      event.retryCount = (event.retryCount || 0) + 1;
 
       const settings = (await IntegrationSetting.findOne({ singletonKey: 'global_settings' })) || {
         autoReplyEnabled: true,
         simulationMode: process.env.SIMULATION_MODE === 'true',
+        maxRetryAttempts: 3,
         templates: {
           resourceFound: 'Found it! Here is the resource you requested: {{resourceUrl}}',
           resourceNotFound: "We couldn't find this Reel in our resource library yet. We'll review it and may add the resource later.",
@@ -152,6 +156,7 @@ export class EventWorkerService {
       } else {
         // Conversational or empty query: ignore safely without sending a DM
         event.processingStatus = 'ignored';
+        event.lockedAt = undefined;
         await event.save();
         return true;
       }
@@ -169,23 +174,36 @@ export class EventWorkerService {
       // If automated replies are disabled
       if (!settings.autoReplyEnabled) {
         event.processingStatus = 'reply_pending';
+        event.lockedAt = undefined;
         await event.save();
         return true;
       }
 
-      // Check if a reply was already logged for this event (defense-in-depth)
+      // Check if a reply was already logged for this event (defense-in-depth with unique index handling)
       let replyLog = await ReplyLog.findOne({ eventId: event._id });
       if (!replyLog) {
-        replyLog = await ReplyLog.create({
-          eventId: event._id,
-          recipientId: event.senderId,
-          replyType: replyType!,
-          resourceId: resourceRef,
-          renderedMessage: renderedReply,
-          deliveryStatus: 'pending',
-          attemptCount: 1,
-          sentAt: new Date(),
-        });
+        try {
+          replyLog = await ReplyLog.create({
+            eventId: event._id,
+            recipientId: event.senderId,
+            replyType: replyType!,
+            resourceId: resourceRef,
+            renderedMessage: renderedReply,
+            deliveryStatus: 'pending',
+            attemptCount: 1,
+            sentAt: new Date(),
+          });
+        } catch (createErr: any) {
+          if (createErr.code === 11000) {
+            replyLog = await ReplyLog.findOne({ eventId: event._id });
+          } else {
+            throw createErr;
+          }
+        }
+      }
+
+      if (!replyLog) {
+        throw new Error(`Failed to obtain ReplyLog for event ${eventId}`);
       }
 
       // Dispatch reply via Meta Send API
@@ -197,7 +215,34 @@ export class EventWorkerService {
         eventId: (event._id as any).toString(),
       });
 
-      return sendResult.success;
+      const maxRetries = settings.maxRetryAttempts || 3;
+      if (!sendResult.success) {
+        if (sendResult.isTransient && event.retryCount < maxRetries) {
+          // Recoverable transient failure: schedule retry with backoff
+          const backoffDelay = Math.min(60000, Math.pow(2, event.retryCount) * 1000);
+          event.processingStatus = 'pending';
+          event.lockedAt = undefined;
+          event.nextRetryAt = new Date(Date.now() + backoffDelay);
+          event.errorCode = 'TRANSIENT_SEND_ERROR';
+          event.errorDetails = sendResult.error;
+          await event.save();
+          return false;
+        } else {
+          // Permanent failure or retry limit reached
+          event.processingStatus = 'reply_failed';
+          event.lockedAt = undefined;
+          event.errorCode = sendResult.errorCode || 'SEND_FAILED';
+          event.errorDetails = sendResult.error;
+          await event.save();
+          return false;
+        }
+      }
+
+      // Successful outbound dispatch
+      event.processingStatus = 'reply_sent';
+      event.lockedAt = undefined;
+      await event.save();
+      return true;
     } catch (err: any) {
       console.error(`[EventWorker] Failed to process event ${eventId}:`, err.message);
       await AutomationEvent.updateOne(
@@ -205,6 +250,7 @@ export class EventWorkerService {
         {
           $set: {
             processingStatus: 'reply_failed',
+            lockedAt: undefined,
             errorCode: 'WORKER_PROCESSING_ERROR',
             errorDetails: err.message,
           },
@@ -224,6 +270,8 @@ export class EventWorkerService {
 
     let processedCount = 0;
     try {
+      const now = new Date();
+
       // 1. Crash recovery: unlock events stuck in 'processing' for > 5 minutes
       const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
       await AutomationEvent.updateMany(
@@ -237,10 +285,15 @@ export class EventWorkerService {
         }
       );
 
-      // 2. Fetch up to 20 pending events
+      // 2. Fetch up to 20 pending events ready for processing (including backoff schedules)
       const pendingEvents = await AutomationEvent.find({
         processingStatus: 'pending',
         retryCount: { $lt: 3 },
+        $or: [
+          { nextRetryAt: { $exists: false } },
+          { nextRetryAt: null },
+          { nextRetryAt: { $lte: now } },
+        ],
       })
         .sort({ createdAt: 1 })
         .limit(20)

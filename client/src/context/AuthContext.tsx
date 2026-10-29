@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { api, getAuthToken, setAuthToken, removeAuthToken } from '../api/client';
+import { api } from '../api/client';
 
 export interface AdminProfile {
   id: string;
@@ -11,7 +11,7 @@ interface AuthContextType {
   admin: AdminProfile | null;
   loading: boolean;
   isAuthenticated: boolean;
-  login: (token: string, admin: AdminProfile) => void;
+  login: (admin: AdminProfile) => void;
   logout: () => Promise<void>;
 }
 
@@ -28,19 +28,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = getAuthToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
+    // Check active HttpOnly cookie session with server
     api.getMe()
-      .then((res) => setAdmin(res.admin))
+      .then((res) => {
+        setAdmin(res.admin);
+      })
       .catch(() => {
-        removeAuthToken();
         setAdmin(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+      });
 
     const handleUnauthorized = () => {
       setAdmin(null);
@@ -50,8 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
   }, []);
 
-  const login = (token: string, adminProfile: AdminProfile) => {
-    setAuthToken(token);
+  const login = (adminProfile: AdminProfile) => {
     setAdmin(adminProfile);
   };
 
@@ -61,7 +58,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // Ignore network failure on logout
     } finally {
-      removeAuthToken();
       setAdmin(null);
     }
   };

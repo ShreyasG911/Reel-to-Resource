@@ -34,6 +34,12 @@ export class IntegrationController {
         readinessStatus = 'partial';
       }
 
+      const [liveDeliveries, simulatedDeliveries, failedDeliveries] = await Promise.all([
+        ReplyLog.countDocuments({ deliveryStatus: 'delivered_to_api' }),
+        ReplyLog.countDocuments({ deliveryStatus: 'simulated' }),
+        ReplyLog.countDocuments({ deliveryStatus: 'failed' }),
+      ]);
+
       res.status(200).json({
         data: {
           readinessStatus,
@@ -47,8 +53,15 @@ export class IntegrationController {
           verificationCategories: {
             configuration: readinessStatus,
             credentialValidity: envChecks.META_PAGE_ACCESS_TOKEN ? 'configured' : 'missing',
+            accountAccess: settings?.connectedAccount?.status === 'configured' ? 'connected' : 'unverified',
             webhookEndpoint: 'available',
             simulationMode: (settings?.simulationMode === true || process.env.SIMULATION_MODE === 'true') ? 'active' : 'inactive',
+          },
+          deliveryHistory: {
+            deliveredToApiCount: liveDeliveries,
+            simulatedCount: simulatedDeliveries,
+            failedCount: failedDeliveries,
+            hasConfirmedLiveDelivery: liveDeliveries > 0,
           },
         },
       });
@@ -72,9 +85,10 @@ export class IntegrationController {
             $set: {
               'connectedAccount.accountId': result.accountId,
               'connectedAccount.username': result.accountName,
+              'connectedAccount.instagramBusinessAccountId': result.instagramBusinessAccountId,
               'connectedAccount.connectedAt': new Date(),
-              'connectedAccount.status': 'configured',
-              'connectedAccount.lastError': undefined,
+              'connectedAccount.status': result.hasInstagramAccount ? 'configured' : 'partial',
+              'connectedAccount.lastError': result.warnings.length > 0 ? result.warnings.join(' ') : undefined,
             },
           },
           { upsert: true }
@@ -86,8 +100,16 @@ export class IntegrationController {
           data: {
             accountId: result.accountId,
             accountName: result.accountName,
+            pageId: result.pageId,
+            pageName: result.pageName,
+            instagramBusinessAccountId: result.instagramBusinessAccountId,
+            hasInstagramAccount: result.hasInstagramAccount,
+            messagingReady: result.messagingReady,
+            warnings: result.warnings,
           },
-          message: 'Meta credentials verified successfully with Graph API.',
+          message: result.hasInstagramAccount
+            ? 'Meta credentials and connected Instagram Professional account verified successfully.'
+            : 'Meta Page credentials are valid, but no connected Instagram Professional account was detected.',
         });
       } else {
         await IntegrationSetting.updateOne(

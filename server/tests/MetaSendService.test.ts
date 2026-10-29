@@ -190,5 +190,45 @@ describe('MetaSendService', () => {
 
     vi.unstubAllGlobals();
   });
+
+  it('verifies credentials using Authorization header without exposing token in URL query', async () => {
+    process.env.META_PAGE_ACCESS_TOKEN = 'secret_test_token_never_in_url';
+
+    let interceptedUrl = '';
+    let interceptedAuthHeader = '';
+
+    const fetchMock = vi.fn().mockImplementation((url: string, opts?: any) => {
+      interceptedUrl = url;
+      interceptedAuthHeader = opts?.headers?.Authorization || '';
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: '123456789',
+          name: 'Verified Business Page',
+          instagram_business_account: {
+            id: '17841400099999',
+          },
+        }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await MetaSendService.verifyCredentials();
+
+    expect(result.valid).toBe(true);
+    expect(result.hasInstagramAccount).toBe(true);
+    expect(result.messagingReady).toBe(true);
+    expect(result.instagramBusinessAccountId).toBe('17841400099999');
+
+    // CRITICAL SECURITY ASSERTION: Token must NEVER be passed in URL query string
+    expect(interceptedUrl).not.toContain('access_token=');
+    expect(interceptedUrl).not.toContain('secret_test_token_never_in_url');
+
+    // Token must be passed securely in Authorization Bearer header
+    expect(interceptedAuthHeader).toBe('Bearer secret_test_token_never_in_url');
+
+    vi.unstubAllGlobals();
+  });
 });
 

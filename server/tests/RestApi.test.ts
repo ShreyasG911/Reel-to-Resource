@@ -102,6 +102,71 @@ describe('Dashboard REST API Endpoints & Security', () => {
     expect(body.error).toContain('Invalid username or password');
   });
 
+  it('enforces CSRF protection on cookie-authenticated mutating requests', async () => {
+    // 1. Log in to get session cookie and csrf_token cookie
+    const loginRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'admin',
+        password: 'CorrectAdminPassword123!',
+      }),
+    });
+    expect(loginRes.status).toBe(200);
+
+    const setCookieHeader = loginRes.headers.get('set-cookie') || '';
+    const tokenMatch = setCookieHeader.match(/admin_token=([^;]+)/);
+    const csrfMatch = setCookieHeader.match(/csrf_token=([^;]+)/);
+    const adminToken = tokenMatch ? tokenMatch[1] : '';
+    const csrfToken = csrfMatch ? csrfMatch[1] : '';
+
+    // Request with cookie auth but MISSING X-CSRF-Token header MUST be rejected with 403
+    const forbiddenRes = await fetch(`${baseUrl}/api/v1/resources`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_token=${adminToken}; csrf_token=${csrfToken}`,
+      },
+      body: JSON.stringify({
+        title: 'Attacker Resource',
+        reelId: 'ATTACK_001',
+        resourceUrl: 'https://example.com/attack',
+      }),
+    });
+
+    expect(forbiddenRes.status).toBe(403);
+    const forbiddenBody: any = await forbiddenRes.json();
+    expect(forbiddenBody.code).toBe('CSRF_INVALID');
+
+    // Request with cookie auth AND MATCHING X-CSRF-Token header MUST succeed
+    const allowedRes = await fetch(`${baseUrl}/api/v1/resources`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `admin_token=${adminToken}; csrf_token=${csrfToken}`,
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({
+        title: 'Legitimate Resource via Cookie',
+        reelId: 'LEGIT_COOKIE_001',
+        resourceUrl: 'https://example.com/legit',
+      }),
+    });
+
+    expect(allowedRes.status).toBe(201);
+  });
+
+  it('POST /api/v1/auth/logout clears session and CSRF cookies', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/auth/logout`, {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') || '';
+    // Must clear both admin_token and csrf_token
+    expect(setCookie).toContain('admin_token=;');
+    expect(setCookie).toContain('csrf_token=;');
+  });
+
   // 2. Resource Management Tests (Authenticated)
   it('POST /api/v1/resources creates resource and auto-generates canonical URL', async () => {
     const res = await fetch(`${baseUrl}/api/v1/resources`, {

@@ -34,6 +34,7 @@ const ReplyLogSchema = new Schema<IReplyLog>(
       type: Schema.Types.ObjectId,
       ref: 'AutomationEvent',
       required: true,
+      unique: true,
       index: true,
     },
     recipientId: {

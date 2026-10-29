@@ -3,11 +3,16 @@ dotenv.config();
 
 import { createApp } from './app';
 import { connectDatabase } from './config/database';
+import { validateProductionSecurity } from './utils/security';
 
 const PORT = process.env.PORT || 5000;
 
 async function bootstrap() {
   try {
+    // 1. Fail-fast validation of security configuration
+    validateProductionSecurity();
+
+    // 2. Connect to database
     await connectDatabase();
     const app = createApp();
 

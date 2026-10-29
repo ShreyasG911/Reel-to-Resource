@@ -128,6 +128,8 @@ export class ResourceController {
         title: sanitized.title,
         description: sanitized.description,
         reelId: sanitized.reelId,
+        reelShortcode: sanitized.reelId,
+        numericMediaId: req.body.numericMediaId ? String(req.body.numericMediaId).trim() : undefined,
         canonicalReelUrl,
         resourceUrl: sanitized.resourceUrl,
         resourceType: sanitized.resourceType,

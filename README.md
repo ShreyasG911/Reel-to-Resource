@@ -128,11 +128,11 @@ Test how the Reel Identification Adapter extracts shortcodes from raw links:
 npm run cli:test-payload "https://www.instagram.com/reel/C890_MySampleReel/?igsh=MWx1YnpqamVvMWQx"
 ```
 
-### 3. Automated Vitest Suite (42 Tests)
+### 3. Automated Vitest Suite (47 Tests)
 ```bash
 npm test
 ```
-Verifies URL sanitization, canonical normalization, 3-tier matching priority, availability gates, 24h messaging window rules, missing token guard, atomic queue deduplication, administrator authentication & authorization, and REST endpoints.
+Verifies URL sanitization, canonical normalization, 3-tier matching priority, availability gates, 24h messaging window rules, missing token guard, atomic queue deduplication, CSRF double-submit protection, session cookie expiration on logout, worker crash recovery, and REST endpoints.
 
 ---
 

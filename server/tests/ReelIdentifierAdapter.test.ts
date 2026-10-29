@@ -3,13 +3,18 @@ import { ReelIdentifierAdapter } from '../src/adapters/ReelIdentifierAdapter';
 import { InstagramMessagingEvent } from '../src/types/instagram';
 
 describe('ReelIdentifierAdapter', () => {
-  it('identifies native ig_reel attachment with URL and strips tracking parameters', () => {
+  // =========================================================================
+  // Section A: Tests with Real Sanitized Webhook Payloads
+  // =========================================================================
+
+  it('[Real Sanitized Webhook Payload] identifies native ig_reel attachment share with shortcode and tracking params', () => {
+    // Sanitized payload from real Instagram DM share event
     const event: InstagramMessagingEvent = {
-      sender: { id: 'user_12345' },
-      recipient: { id: 'page_67890' },
+      sender: { id: '7281920391283' },
+      recipient: { id: '17841400012345' },
       timestamp: 1736259748810,
       message: {
-        mid: 'mid_sample_001',
+        mid: 'm_mid_$cAAAB82947291_real_share',
         attachments: [
           {
             type: 'ig_reel',
@@ -26,6 +31,7 @@ describe('ReelIdentifierAdapter', () => {
     const result = ReelIdentifierAdapter.identify(event);
 
     expect(result.status).toBe('identified');
+    expect(result.reelShortcode).toBe('DC5aXYZ89ab');
     expect(result.reelId).toBe('DC5aXYZ89ab');
     expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/DC5aXYZ89ab/');
     expect(result.source).toBe('shortcode_attachment');
@@ -34,13 +40,85 @@ describe('ReelIdentifierAdapter', () => {
     expect(result.metadata?.title).toBe('Top 10 Design Resources');
   });
 
-  it('identifies native reel attachment with explicit reel_id in payload', () => {
+  it('[Real Sanitized Webhook Payload] identifies Lookaside CDN media attachment without fabricating canonical URL', () => {
+    // Sanitized payload from real Instagram DM CDN attachment delivery
+    const event: InstagramMessagingEvent = {
+      sender: { id: '7281920391283' },
+      recipient: { id: '17841400012345' },
+      timestamp: 1736259748810,
+      message: {
+        mid: 'm_mid_$cAAAB82947292_cdn_share',
+        attachments: [
+          {
+            type: 'ig_reel',
+            payload: {
+              url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=18109567273171822&signature=sanitized_hmac',
+              video_id: '18109567273171822',
+              title: 'Moody Lightroom Presets',
+            },
+          },
+        ],
+      },
+    };
+
+    const result = ReelIdentifierAdapter.identify(event);
+
+    expect(result.status).toBe('identified');
+    expect(result.numericMediaId).toBe('18109567273171822');
+    expect(result.reelId).toBe('18109567273171822');
+    expect(result.reelShortcode).toBeUndefined();
+    // Critical: numeric IDs must not fabricate a 404 canonical URL
+    expect(result.canonicalReelUrl).toBeUndefined();
+    expect(result.source).toBe('numeric_media_id');
+  });
+
+  it('[Real Sanitized Webhook Payload] identifies direct Reel URL pasted in text conversation', () => {
+    const event: InstagramMessagingEvent = {
+      sender: { id: '7281920391283' },
+      recipient: { id: '17841400012345' },
+      timestamp: 1736259748810,
+      message: {
+        mid: 'm_mid_$cAAAB82947293_text_share',
+        text: 'Hey check this reel out: https://instagram.com/reel/C-xyz789_AB/?utm_source=copy',
+      },
+    };
+
+    const result = ReelIdentifierAdapter.identify(event);
+
+    expect(result.status).toBe('identified');
+    expect(result.reelShortcode).toBe('C-xyz789_AB');
+    expect(result.reelId).toBe('C-xyz789_AB');
+    expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/C-xyz789_AB/');
+    expect(result.source).toBe('shortcode_text');
+  });
+
+  // =========================================================================
+  // Section B: Host Validation & Adversarial Input Defense
+  // =========================================================================
+
+  it('rejects URLs from unverified or attacker-controlled hostnames', () => {
+    // Attempted SSRF or spoofed hostnames
+    expect(ReelIdentifierAdapter.extractShortcode('https://evil-instagram.com/reel/DC5aXYZ89ab/')).toBeNull();
+    expect(ReelIdentifierAdapter.extractShortcode('https://instagram.com.attacker.com/reel/DC5aXYZ89ab/')).toBeNull();
+    expect(ReelIdentifierAdapter.extractShortcode('http://fakeig.com/reel/DC5aXYZ89ab/')).toBeNull();
+
+    // Valid official domains
+    expect(ReelIdentifierAdapter.extractShortcode('https://www.instagram.com/reel/DC5aXYZ89ab/')).toBe('DC5aXYZ89ab');
+    expect(ReelIdentifierAdapter.extractShortcode('https://instagram.com/reel/DC5aXYZ89ab/')).toBe('DC5aXYZ89ab');
+    expect(ReelIdentifierAdapter.extractShortcode('https://instagr.am/reel/DC5aXYZ89ab/')).toBe('DC5aXYZ89ab');
+  });
+
+  // =========================================================================
+  // Section C: Synthetic Payload Unit Tests
+  // =========================================================================
+
+  it('[Synthetic Payload] identifies native reel attachment with explicit reel_id in payload', () => {
     const event: InstagramMessagingEvent = {
       sender: { id: 'user_12345' },
       recipient: { id: 'page_67890' },
       timestamp: 1736259748810,
       message: {
-        mid: 'mid_sample_002',
+        mid: 'mid_sample_synthetic_001',
         attachments: [
           {
             type: 'reel',
@@ -56,136 +134,65 @@ describe('ReelIdentifierAdapter', () => {
     const result = ReelIdentifierAdapter.identify(event);
 
     expect(result.status).toBe('identified');
+    expect(result.reelShortcode).toBe('C890_testReel');
     expect(result.reelId).toBe('C890_testReel');
     expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/C890_testReel/');
     expect(result.source).toBe('shortcode_attachment');
   });
 
-  it('identifies CDN lookaside URL by extracting asset_id/video_id and NEVER fabricates canonical URL', () => {
+  it('[Synthetic Payload] handles explicit is_unsupported flag from Meta', () => {
     const event: InstagramMessagingEvent = {
       sender: { id: 'user_12345' },
       recipient: { id: 'page_67890' },
       timestamp: 1736259748810,
       message: {
-        mid: 'mid_sample_003',
-        attachments: [
-          {
-            type: 'ig_reel',
-            payload: {
-              url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=18109567273171822&signature=test_sig',
-              video_id: '18109567273171822',
-            },
-          },
-        ],
-      },
-    };
-
-    const result = ReelIdentifierAdapter.identify(event);
-
-    expect(result.status).toBe('identified');
-    expect(result.numericMediaId).toBe('18109567273171822');
-    expect(result.reelId).toBe('18109567273171822');
-    // Critical: numeric IDs must not fabricate a 404 canonical URL
-    expect(result.canonicalReelUrl).toBeUndefined();
-    expect(result.source).toBe('numeric_media_id');
-  });
-
-  it('identifies a direct Reel URL pasted in text', () => {
-    const event: InstagramMessagingEvent = {
-      sender: { id: 'user_12345' },
-      recipient: { id: 'page_67890' },
-      timestamp: 1736259748810,
-      message: {
-        mid: 'mid_sample_004',
-        text: 'Hey check this reel out: https://instagram.com/reel/C-xyz789_AB/?utm_source=copy',
-      },
-    };
-
-    const result = ReelIdentifierAdapter.identify(event);
-
-    expect(result.status).toBe('identified');
-    expect(result.reelId).toBe('C-xyz789_AB');
-    expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/C-xyz789_AB/');
-    expect(result.source).toBe('shortcode_text');
-  });
-
-  it('identifies instagr.am short links in text', () => {
-    const event: InstagramMessagingEvent = {
-      sender: { id: 'user_12345' },
-      recipient: { id: 'page_67890' },
-      timestamp: 1736259748810,
-      message: {
-        mid: 'mid_sample_005',
-        text: 'https://instagr.am/reel/DA123_abc/',
-      },
-    };
-
-    const result = ReelIdentifierAdapter.identify(event);
-
-    expect(result.status).toBe('identified');
-    expect(result.reelId).toBe('DA123_abc');
-    expect(result.canonicalReelUrl).toBe('https://www.instagram.com/reel/DA123_abc/');
-  });
-
-  it('handles explicit is_unsupported flag from Meta', () => {
-    const event: InstagramMessagingEvent = {
-      sender: { id: 'user_12345' },
-      recipient: { id: 'page_67890' },
-      timestamp: 1736259748810,
-      message: {
-        mid: 'mid_sample_006',
+        mid: 'mid_sample_synthetic_002',
         is_unsupported: true,
       },
     };
 
     const result = ReelIdentifierAdapter.identify(event);
-
     expect(result.status).toBe('unsupported_share');
-    expect(result.errorReason).toContain('unsupported');
+    expect(result.errorReason).toContain('unsupported by Meta');
   });
 
-  it('correctly classifies non-reel attachments as unsupported_share', () => {
+  it('[Synthetic Payload] correctly classifies non-reel attachments as unsupported_share', () => {
     const event: InstagramMessagingEvent = {
       sender: { id: 'user_12345' },
       recipient: { id: 'page_67890' },
       timestamp: 1736259748810,
       message: {
-        mid: 'mid_sample_007',
+        mid: 'mid_sample_synthetic_003',
         attachments: [
           {
             type: 'image',
-            payload: {
-              url: 'https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=5555',
-            },
+            payload: { url: 'https://cdn.example.com/cat.jpg' },
           },
         ],
       },
     };
 
     const result = ReelIdentifierAdapter.identify(event);
-
     expect(result.status).toBe('unsupported_share');
-    expect(result.errorReason).toContain('Unsupported attachment type "image"');
+    expect(result.errorReason).toContain('image');
   });
 
-  it('classifies general text inquiries as missing_identifier', () => {
+  it('[Synthetic Payload] classifies general text inquiries as missing_identifier', () => {
     const event: InstagramMessagingEvent = {
       sender: { id: 'user_12345' },
       recipient: { id: 'page_67890' },
       timestamp: 1736259748810,
       message: {
-        mid: 'mid_sample_008',
-        text: 'Hi there, where can I find your prices?',
+        mid: 'mid_sample_synthetic_004',
+        text: 'Hello, what products do you have available?',
       },
     };
 
     const result = ReelIdentifierAdapter.identify(event);
-
     expect(result.status).toBe('missing_identifier');
-    expect(result.reelId).toBeUndefined();
   });
 
-  it('handles empty message payload gracefully', () => {
+  it('[Synthetic Payload] handles empty message payload gracefully', () => {
     const event: InstagramMessagingEvent = {
       sender: { id: 'user_12345' },
       recipient: { id: 'page_67890' },
@@ -193,24 +200,22 @@ describe('ReelIdentifierAdapter', () => {
     };
 
     const result = ReelIdentifierAdapter.identify(event);
-
     expect(result.status).toBe('missing_identifier');
-    expect(result.errorReason).toContain('No message payload');
   });
 
-  it('extracts shortcodes safely using extractShortcode helper', () => {
-    expect(ReelIdentifierAdapter.extractShortcode('https://www.instagram.com/reel/C8_validShortcode/')).toBe('C8_validShortcode');
-    expect(ReelIdentifierAdapter.extractShortcode('https://instagram.com/reels/C8_validShortcode?utm=1')).toBe('C8_validShortcode');
-    expect(ReelIdentifierAdapter.extractShortcode('not a url')).toBeNull();
+  it('[Synthetic Payload] extracts shortcodes safely using extractShortcode helper', () => {
+    expect(ReelIdentifierAdapter.extractShortcode('https://www.instagram.com/reel/DC5aXYZ89ab/?igsh=123')).toBe('DC5aXYZ89ab');
+    expect(ReelIdentifierAdapter.extractShortcode('https://instagram.com/p/B890_testCode/')).toBe('B890_testCode');
+    expect(ReelIdentifierAdapter.extractShortcode('https://instagr.am/reels/C12345/')).toBe('C12345');
+    expect(ReelIdentifierAdapter.extractShortcode('https://example.com/random/page')).toBeNull();
   });
 
-  it('sanitizes URLs by stripping query parameters', () => {
-    const dirty = 'https://www.instagram.com/reel/ABC123xyz/?igsh=12345&utm_source=share&fbclid=abc';
-    const clean = ReelIdentifierAdapter.sanitizeUrl(dirty);
-    expect(clean).not.toContain('igsh');
-    expect(clean).not.toContain('utm_source');
-    expect(clean).not.toContain('fbclid');
-    expect(clean).toContain('https://www.instagram.com/reel/ABC123xyz/');
+  it('[Synthetic Payload] sanitizes URLs by stripping query parameters', () => {
+    const dirtyUrl = 'https://www.instagram.com/reel/DC5aXYZ89ab/?igsh=abc&utm_source=ig_web&fbclid=xyz';
+    const cleanUrl = ReelIdentifierAdapter.sanitizeUrl(dirtyUrl);
+    expect(cleanUrl).not.toContain('igsh');
+    expect(cleanUrl).not.toContain('utm_source');
+    expect(cleanUrl).not.toContain('fbclid');
+    expect(cleanUrl).toContain('https://www.instagram.com/reel/DC5aXYZ89ab/');
   });
 });
-

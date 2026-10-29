@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { AdminUser } from '../models/AdminUser';
+import { getJwtSecret, timingSafeCsrfCompare } from '../utils/security';
 
 export interface AuthenticatedRequest extends Request {
   admin?: {
@@ -13,11 +13,13 @@ export interface AuthenticatedRequest extends Request {
 export function requireAdminAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   let token: string | undefined;
+  let isCookieAuth = false;
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7).trim();
   } else if ((req as any).cookies?.admin_token) {
     token = (req as any).cookies.admin_token;
+    isCookieAuth = true;
   }
 
   if (!token) {
@@ -28,14 +30,27 @@ export function requireAdminAuth(req: AuthenticatedRequest, res: Response, next:
     return;
   }
 
-  const jwtSecret =
-    process.env.DASHBOARD_JWT_SECRET ||
-    process.env.ADMIN_JWT_SECRET ||
-    (process.env.NODE_ENV !== 'production' ? 'dev_fallback_secret_min_32_characters_long' : undefined);
+  // CSRF Protection: For state-changing methods authenticated via cookies, verify CSRF token
+  const mutatingMethods = ['POST', 'PATCH', 'PUT', 'DELETE'];
+  if (isCookieAuth && mutatingMethods.includes(req.method.toUpperCase())) {
+    const headerCsrf = req.headers['x-csrf-token'] as string | undefined;
+    const cookieCsrf = (req as any).cookies?.csrf_token as string | undefined;
 
-  if (!jwtSecret) {
+    if (!headerCsrf || !cookieCsrf || !timingSafeCsrfCompare(headerCsrf, cookieCsrf)) {
+      res.status(403).json({
+        error: 'CSRF validation failed: Missing or invalid X-CSRF-Token header.',
+        code: 'CSRF_INVALID',
+      });
+      return;
+    }
+  }
+
+  let jwtSecret: string;
+  try {
+    jwtSecret = getJwtSecret();
+  } catch (err: any) {
     res.status(500).json({
-      error: 'Server security configuration error: DASHBOARD_JWT_SECRET is missing.',
+      error: 'Server security configuration error: DASHBOARD_JWT_SECRET is missing or invalid.',
       code: 'SERVER_MISCONFIGURED',
     });
     return;

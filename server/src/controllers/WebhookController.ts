@@ -51,9 +51,16 @@ export class WebhookController {
         }
 
         try {
-          await EventWorkerService.enqueueEvent(event);
+          const enqueueResult = await EventWorkerService.enqueueEvent(event);
+          if (!enqueueResult.persisted && !enqueueResult.isDuplicate) {
+            console.error(`[WebhookController] Event persistence incomplete for ${event.message.mid}`);
+            res.status(500).json({ error: 'Failed to durably persist incoming event' });
+            return;
+          }
         } catch (err: any) {
           console.error(`[WebhookController] Failed to enqueue event ${event.message.mid}:`, err.message);
+          res.status(500).json({ error: 'Database error persisting incoming webhook event' });
+          return;
         }
       }
     }
