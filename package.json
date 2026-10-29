@@ -1,0 +1,28 @@
+{
+  "name": "reel-to-resource-matcher",
+  "version": "1.0.0",
+  "description": "Self-hosted Instagram Reel-to-Resource DM automation platform",
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build:server": "npm --prefix server run build",
+    "build:client": "npm --prefix client run build",
+    "build": "npm run build:server && npm run build:client",
+    "start": "npm --prefix server start",
+    "seed": "npm --prefix server run seed",
+    "test": "npm --prefix server test",
+    "cli:test-payload": "npm --prefix server run cli:test-payload",
+    "cli:simulate-webhook": "npm --prefix server run cli:simulate-webhook"
+  },
+  "keywords": [
+    "instagram",
+    "meta-graph-api",
+    "reels",
+    "dm-automation",
+    "self-hosted",
+    "mongodb"
+  ],
+  "author": "Antigravity",
+  "license": "MIT"
+}
+
